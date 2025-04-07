@@ -29,7 +29,7 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <mach/message.h>
-#include <darling/emulation/ext/for-libkqueue.h>
+#include <darling/emulation/legacy_path/ext/for-libkqueue.h>
 #include <darlingserver/rpc-supplement.h>
 
 #include "private.h"
