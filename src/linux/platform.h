@@ -43,7 +43,7 @@ struct filter;
  * Get the current thread ID
  */
 #ifdef DARLING
-#include <darling/emulation/base.h>
+#include <darling/emulation/legacy_path/base.h>
 # define syscall __linux_syscall
 #else
 # define _GNU_SOURCE
