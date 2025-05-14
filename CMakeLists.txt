@@ -27,7 +27,7 @@ if (DARLING)
 	)
 	
 	# For epoll
-	include_directories("${CMAKE_SOURCE_DIR}/src/external/xnu/darling/src/libsystem_kernel/emulation/include/legacy_path/ext")
+	include_directories("${CMAKE_SOURCE_DIR}/src/external/xnu/darling/src/libsystem_kernel/emulation/include/linux_premigration/ext")
 	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -nostdinc -DHAVE_SYS_EVENTFD_H -DHAVE_SYS_SIGNALFD_H -DHAVE_SYS_TIMERFD_H -ggdb -O0")
 
 	#add_definitions(-DKERNEL_PRIVATE)

@@ -24,7 +24,7 @@
 #include <sys/types.h>
 #include <string.h>
 #include <unistd.h>
-#include <darling/emulation/legacy_path/ext/for-libkqueue.h>
+#include <darling/emulation/linux_premigration/ext/for-libkqueue.h>
 #include <darlingserver/rpc-supplement.h>
 
 #include "private.h"
