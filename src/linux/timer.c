@@ -274,7 +274,19 @@ evfilt_timer_knote_delete(struct filter *filt, struct knote *kn)
 int
 evfilt_timer_knote_enable(struct filter *filt, struct knote *kn)
 {
-    return evfilt_timer_knote_modify(filt, kn, &kn->kev);
+    struct itimerspec ts;
+    int tfd = kn->data.pfd;
+
+    if (!kn->kev.data)
+        kn->kev.data = 1;
+
+    convert_to_itimerspec(&ts, kn->kev.data, kn->kev.flags & EV_ONESHOT, kn->kev.fflags);
+    if (timerfd_settime(tfd, 0, &ts, NULL) < 0) {
+        dbg_printf("timerfd_settime(2): %s", strerror(errno));
+        return (-1);
+    }
+
+    return (0);
 }
 
 int
