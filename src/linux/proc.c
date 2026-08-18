@@ -222,7 +222,7 @@ evfilt_proc_knote_modify(struct filter *filt, struct knote *kn,
 	call.header.number = dserver_kqchan_msgnum_proc_modify;
 	call.header.pid = getpid();
 	call.header.tid = THREAD_ID;
-	call.flags = kn->data.events;
+	call.flags = kev->fflags;
 
 	rv = send(kn->kdata.kn_dupfd, &call, sizeof(call), 0);
 	if (rv < 0) {
