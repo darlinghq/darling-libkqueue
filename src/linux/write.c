@@ -107,6 +107,10 @@ evfilt_socket_knote_modify(struct filter *filt, struct knote *kn,
         kn->data.events |= EPOLLET;
 	kn->kn_epollfd = filter_epfd(filt);
 
+    /* Disabled registrations are added by the enable callback, not MOD. */
+    if (kn->kev.flags & EV_DISABLE)
+        return (0);
+
     memset(&ev, 0, sizeof(ev));
     ev.events = kn->data.events;
     ev.data.ptr = kn;

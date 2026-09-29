@@ -189,15 +189,40 @@ kevent_copyin_one(struct kqueue *kq, const struct kevent64_s *src)
     if ((src->flags & EV_DELETE) || ((kn->kn_flags & KNFL_DEFER_DELETE) && (src->flags & EV_ENABLE))) {
         rv = knote_delete(filt, kn);
         dbg_printf("knote_delete returned %d", rv);
-    } else if (src->flags & EV_DISABLE) {
+        return (rv);
+    }
+
+    int was_disabled = kn->kev.flags & EV_DISABLE;
+
+    /* EV_ADD updates an existing registration, including when the caller
+     * also enables or disables it. In particular, libdispatch rearms timers
+     * with EV_ADD | EV_ENABLE; enabling the old registration alone leaves
+     * its previous deadline and user data in place. */
+    if (src->flags & EV_ADD) {
+        kn->kev.udata = src->udata;
+        rv = filt->kn_modify(filt, kn, src);
+        dbg_printf("kn_modify returned %d", rv);
+        if (rv < 0)
+            return (rv);
+        /* Filter updates may copy flags. Preserve the actual registration
+         * state until the transition below has reached the backend. */
+        if (was_disabled)
+            kn->kev.flags |= EV_DISABLE;
+        else
+            kn->kev.flags &= ~EV_DISABLE;
+    }
+
+    if (src->flags & EV_DISABLE) {
         kn->kev.flags |= EV_DISABLE;
-        rv = filt->kn_disable(filt, kn);
+        if (!was_disabled)
+            rv = filt->kn_disable(filt, kn);
         dbg_printf("kn_disable returned %d", rv);
-    } else if (src->flags & EV_ENABLE) {
+    } else if (src->flags & (EV_ENABLE | EV_ADD)) {
         kn->kev.flags &= ~EV_DISABLE;
-        rv = filt->kn_enable(filt, kn);
+        if (was_disabled)
+            rv = filt->kn_enable(filt, kn);
         dbg_printf("kn_enable returned %d", rv);
-    } else if (src->flags & EV_ADD || src->flags == 0 || src->flags & EV_RECEIPT) {
+    } else if (!(src->flags & EV_ADD) && (src->flags == 0 || src->flags & EV_RECEIPT)) {
         kn->kev.udata = src->udata;
         rv = filt->kn_modify(filt, kn, src);
         dbg_printf("kn_modify returned %d", rv);

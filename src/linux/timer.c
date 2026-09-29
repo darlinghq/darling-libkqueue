@@ -233,10 +233,16 @@ evfilt_timer_knote_modify(struct filter *filt, struct knote *kn,
 {
     struct itimerspec ts;
     int tfd = kn->data.pfd;
+    bool was_disabled = kn->kev.flags & EV_DISABLE;
 
     kn->kev.data = kev->data;
     kn->kev.flags = kev->flags;
     kn->kev.fflags = kev->fflags;
+
+    /* Updating a disabled timer must not arm it. If requested, the common
+     * enable transition will arm the updated configuration afterward. */
+    if (was_disabled)
+        return (0);
 
     if (!kn->kev.data)
         kn->kev.data = 1;
