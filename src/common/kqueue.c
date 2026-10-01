@@ -56,6 +56,8 @@ get_fd_limit(void)
         dbg_perror("getrlimit(2)");
         return (65536);
     } else {
+        if (rlim.rlim_max > 65536)
+            return (65536);
         return (rlim.rlim_max);
     }
 #endif
