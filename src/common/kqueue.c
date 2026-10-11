@@ -311,10 +311,13 @@ static void _kqueue_close_atfork_cb(int kqfd, void* kqptr, void* private)
 
 void VISIBLE kqueue_atfork(void)
 {
+    // Mutexes are not valid after a fork, reset it to unlocked state
+    pthread_mutex_init(&kq_mtx, NULL);
+#ifdef DARLING
+    __darling_kqueue_listenregistry_atfork();
+#endif
     if (kqmap != NULL)
     {
-        // Mutexes are not valid after a fork, reset it to unlocked state
-        pthread_mutex_init(&kq_mtx, NULL);
         map_foreach(kqmap, _kqueue_close_atfork_cb, NULL);
     }
 }

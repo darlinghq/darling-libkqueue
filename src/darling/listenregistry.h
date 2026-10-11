@@ -6,5 +6,6 @@
 bool VISIBLE __darling_kqueue_get_listen_status(int fd);
 void VISIBLE __darling_kqueue_register_listen(int fd);
 void VISIBLE __darling_kqueue_unregister_listen(int fd);
+void __darling_kqueue_listenregistry_atfork(void);
 
 #endif
