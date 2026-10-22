@@ -105,6 +105,7 @@ linux_evfilt_user_copyout(struct kevent64_s *dst, struct knote *src, void *ptr U
     if (src->kev.flags & (EV_DISPATCH | EV_CLEAR | EV_ONESHOT)) {
         if (eventfd_lower(src->kdata.kn_eventfd) < 0)
             return (-1);
+        src->kev.fflags &= ~NOTE_TRIGGER;
     }
 
     if (src->kev.flags & EV_DISPATCH)
@@ -136,6 +137,10 @@ linux_evfilt_user_knote_create(struct filter *filt, struct knote *kn)
     }
 
     kn->kdata.kn_eventfd = evfd;
+
+    if (kn->kev.fflags & NOTE_TRIGGER) {
+        eventfd_raise(evfd);
+    }
 
     return (0);
 
