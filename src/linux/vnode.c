@@ -96,8 +96,8 @@ add_watch(struct filter *filt, struct knote *kn)
 
     /* Convert the fflags to the inotify mask */
     /* Closing another descriptor for this inode is not a vnode event, so
-       IN_CLOSE is not watched; IN_ATTRIB keeps the mask valid for fflags 0. */
-    mask = IN_ATTRIB;
+       IN_CLOSE is not watched. */
+    mask = 0;
     if (kn->kev.fflags & NOTE_DELETE)
         mask |= IN_ATTRIB | IN_DELETE_SELF;
     if (kn->kev.fflags & NOTE_WRITE)      
@@ -109,8 +109,10 @@ add_watch(struct filter *filt, struct knote *kn)
         mask |= IN_ATTRIB;
     if (kn->kev.fflags & NOTE_RENAME)
         mask |= IN_MOVE_SELF;
-    if (kn->kev.flags & EV_ONESHOT)
-        mask |= IN_ONESHOT;
+    /* No IN_ONESHOT: it would consume the watch on an event that copyout
+       drops, while the core only deletes a one-shot knote on delivery. */
+    if (mask == 0)
+        mask = IN_ATTRIB; /* inotify rejects an empty mask; its events are dropped */
 
     /* Create an inotify descriptor */
     ifd = inotify_init();

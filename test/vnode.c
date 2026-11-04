@@ -126,6 +126,26 @@ test_kevent_vnode_note_extend(struct test_context *ctx)
     kevent_cmp(&kev, &ret);
 }
 
+/* An event that is dropped (here a chmod, not requested) must not consume
+   the watch of a one-shot knote. */
+void
+test_kevent_vnode_oneshot_after_dropped_event(struct test_context *ctx)
+{
+    struct kevent kev, ret;
+    struct timespec timeout = { 2, 0 };
+    int nfds;
+
+    kevent_add(ctx->kqfd, &kev, ctx->vnode_fd, EVFILT_VNODE, EV_ADD | EV_ONESHOT, NOTE_WRITE, 0, NULL);
+
+    if (chmod(ctx->testfile, 0640) < 0)
+        die("chmod");
+    testfile_write(ctx->testfile);
+
+    nfds = kevent(ctx->kqfd, NULL, 0, &ret, 1, &timeout);
+    if (nfds != 1 || ret.filter != EVFILT_VNODE || ret.fflags != NOTE_WRITE)
+        errx(1, "%s - write after an unrequested chmod was not reported (nfds=%d)", test_id, nfds);
+}
+
 /* Closing another descriptor for the same file is not a vnode event and
    must not delete the knote. */
 void
@@ -309,6 +329,7 @@ test_evfilt_vnode(struct test_context *ctx)
     test(kevent_vnode_note_write, ctx);
     test(kevent_vnode_note_extend, ctx);
     test(kevent_vnode_close_other_fd, ctx);
+    test(kevent_vnode_oneshot_after_dropped_event, ctx);
     test(kevent_vnode_note_attrib, ctx);
     test(kevent_vnode_note_rename, ctx);
     test(kevent_vnode_note_delete, ctx);
