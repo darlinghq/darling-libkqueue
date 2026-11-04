@@ -146,6 +146,27 @@ test_kevent_vnode_oneshot_after_dropped_event(struct test_context *ctx)
         errx(1, "%s - write after an unrequested chmod was not reported (nfds=%d)", test_id, nfds);
 }
 
+/* Events queued together are reported together: a write then a chmod seen
+   in one kevent() must give both notes. */
+void
+test_kevent_vnode_write_and_attrib_together(struct test_context *ctx)
+{
+    struct kevent kev, ret;
+    struct timespec timeout = { 2, 0 };
+    int nfds;
+
+    kevent_add(ctx->kqfd, &kev, ctx->vnode_fd, EVFILT_VNODE, EV_ADD | EV_ONESHOT, NOTE_WRITE | NOTE_ATTRIB, 0, NULL);
+
+    testfile_write(ctx->testfile);
+    if (chmod(ctx->testfile, 0600) < 0)
+        die("chmod");
+
+    nfds = kevent(ctx->kqfd, NULL, 0, &ret, 1, &timeout);
+    if (nfds != 1 || ret.filter != EVFILT_VNODE || ret.fflags != (NOTE_WRITE | NOTE_ATTRIB))
+        errx(1, "%s - write and chmod not reported together (nfds=%d; fflags=%#x)",
+                test_id, nfds, (unsigned int)ret.fflags);
+}
+
 /* Closing another descriptor for the same file is not a vnode event and
    must not delete the knote. */
 void
@@ -330,6 +351,7 @@ test_evfilt_vnode(struct test_context *ctx)
     test(kevent_vnode_note_extend, ctx);
     test(kevent_vnode_close_other_fd, ctx);
     test(kevent_vnode_oneshot_after_dropped_event, ctx);
+    test(kevent_vnode_write_and_attrib_together, ctx);
     test(kevent_vnode_note_attrib, ctx);
     test(kevent_vnode_note_rename, ctx);
     test(kevent_vnode_note_delete, ctx);
