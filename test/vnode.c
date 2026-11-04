@@ -105,12 +105,56 @@ test_kevent_vnode_note_write(struct test_context *ctx)
 
     testfile_write(ctx->testfile);
 
-    /* BSD kqueue adds NOTE_EXTEND even though it was not requested */
+    /* Only the requested events that happened are reported: no NOTE_EXTEND */
     /* BSD kqueue removes EV_ENABLE */
     kev.flags &= ~EV_ENABLE; // XXX-FIXME compatibility issue
-    kev.fflags |= NOTE_EXTEND; // XXX-FIXME compatibility issue
     kevent_get(&ret, ctx->kqfd);
     kevent_cmp(&kev, &ret);
+}
+
+void
+test_kevent_vnode_note_extend(struct test_context *ctx)
+{
+    struct kevent kev, ret;
+
+    kevent_add(ctx->kqfd, &kev, ctx->vnode_fd, EVFILT_VNODE, EV_ADD | EV_ONESHOT, NOTE_EXTEND, 0, NULL);
+
+    testfile_write(ctx->testfile);
+
+    kev.flags &= ~EV_ENABLE; // XXX-FIXME compatibility issue
+    kevent_get(&ret, ctx->kqfd);
+    kevent_cmp(&kev, &ret);
+}
+
+/* Closing another descriptor for the same file is not a vnode event and
+   must not delete the knote. */
+void
+test_kevent_vnode_close_other_fd(struct test_context *ctx)
+{
+    struct kevent kev, ret;
+    struct timespec timeout = { 0, 200 * 1000 * 1000 };
+    int fd2, nfds;
+
+    kevent_add(ctx->kqfd, &kev, ctx->vnode_fd, EVFILT_VNODE, EV_ADD, NOTE_WRITE, 0, NULL);
+
+    fd2 = open(ctx->testfile, O_RDONLY);
+    if (fd2 < 0)
+        err(1, "open of %s", ctx->testfile);
+    close(fd2);
+
+    nfds = kevent(ctx->kqfd, NULL, 0, &ret, 1, &timeout);
+    if (nfds != 0)
+        errx(1, "%s - close of a second descriptor produced an event (fflags=%#x)",
+                test_id, (unsigned int)ret.fflags);
+
+    /* The knote must still be registered */
+    testfile_write(ctx->testfile);
+    kevent_get(&ret, ctx->kqfd);
+    if (ret.filter != EVFILT_VNODE || ret.fflags != NOTE_WRITE)
+        errx(1, "%s - incorrect event (filt=%d; fflags=%#x)", test_id, ret.filter,
+                (unsigned int)ret.fflags);
+
+    kevent_add(ctx->kqfd, &kev, ctx->vnode_fd, EVFILT_VNODE, EV_DELETE, 0, 0, NULL);
 }
 
 void
@@ -263,6 +307,8 @@ test_evfilt_vnode(struct test_context *ctx)
     test(kevent_vnode_dispatch, ctx);
 #endif
     test(kevent_vnode_note_write, ctx);
+    test(kevent_vnode_note_extend, ctx);
+    test(kevent_vnode_close_other_fd, ctx);
     test(kevent_vnode_note_attrib, ctx);
     test(kevent_vnode_note_rename, ctx);
     test(kevent_vnode_note_delete, ctx);
