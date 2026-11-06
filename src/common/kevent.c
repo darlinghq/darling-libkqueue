@@ -358,7 +358,7 @@ kevent64_impl(int kqfd, const struct kevent64_s *changelist, int nchanges,
     kq = kqueue_lookup(kqfd);
     if (kq == NULL) {
         pthread_mutex_unlock(&kq_mtx);
-        errno = ENOENT;
+        errno = EBADF;
         return (-1);
     }
 

@@ -32,12 +32,12 @@ void __darling_kqueue_register_listen(int fd)
     pthread_mutex_lock(&registry_mtx);
 
     if (registry_vector == NULL) {
-        registry_vector = malloc(REGISTRY_VECTOR_INITIAL_CAPACITY);
+        registry_vector = malloc(REGISTRY_VECTOR_INITIAL_CAPACITY * sizeof(int));
         if (registry_vector == NULL)
             goto quit;
         registry_vector_capacity = REGISTRY_VECTOR_INITIAL_CAPACITY;
     } else if (registry_vector_size == registry_vector_capacity) {
-        int* newPtr = realloc(registry_vector, registry_vector_capacity * 2);
+        int* newPtr = realloc(registry_vector, registry_vector_capacity * 2 * sizeof(int));
         if (newPtr == NULL)
             goto quit;
         registry_vector = newPtr;
@@ -60,12 +60,21 @@ void __darling_kqueue_unregister_listen(int fd)
 {
     pthread_mutex_lock(&registry_mtx);
 
-    for (size_t i = 0; i < registry_vector_size; ++i) {
-        while (registry_vector[i] == fd) {
-            registry_vector[i] = registry_vector[registry_vector_size];
-            --registry_vector_size;
+    if (registry_vector != NULL && registry_vector_size > 0) {
+        for (size_t i = 0; i < registry_vector_size; ) {
+            if (registry_vector[i] == fd) {
+                registry_vector[i] = registry_vector[registry_vector_size - 1];
+                --registry_vector_size;
+            } else {
+                ++i;
+            }
         }
     }
 
     pthread_mutex_unlock(&registry_mtx);
+}
+
+void __darling_kqueue_listenregistry_atfork(void)
+{
+    pthread_mutex_init(&registry_mtx, NULL);
 }
