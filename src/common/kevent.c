@@ -127,7 +127,7 @@ kevent_copyin_one(struct kqueue *kq, const struct kevent64_s *src)
 
     dbg_printf("src=%s", kevent_dump(src));
 
-    kn = knote_lookup(filt, src->ident);
+    kn = knote_lookup(filt, src);
     dbg_printf("knote_lookup: ident %d == %p", (int)src->ident, kn);
     if (kn == NULL) {
         if (src->flags & EV_ADD) {

@@ -218,15 +218,6 @@ kqueue_closed_fd(int fd)
 	if (kqmap == NULL)
 		return;
 
-	struct kevent64_s ev[2];
-
-	ev[0].ident = fd;
-	ev[0].flags = EV_DELETE | EV_RECEIPT;
-	ev[0].filter = EVFILT_READ;
-	ev[1].ident = fd;
-	ev[1].flags = EV_DELETE | EV_RECEIPT;
-	ev[1].filter = EVFILT_WRITE;
-
 	// we know it's not a kqueue FD (since kqueue_close() takes care of those),
 	// but it could be a fd inside a kqueue. Since we're creating duplicates of all fd's,
 	// we now have to walk through all known kqueues and remove the fd from them.
@@ -252,10 +243,14 @@ kqueue_closed_fd(int fd)
 	for (size_t i = 0; i < context.kq_count; ++i) {
 		struct kqueue* kq = context.kqs_to_check[i];
 
+		struct filter* filt;
+
 		kqueue_lock(kq);
-		// we don't care whether these operations succeed or not
-		kevent_copyin_one(kq, &ev[0]);
-		kevent_copyin_one(kq, &ev[1]);
+		// drop every registration of the fd, including udata-specific ones
+		if (filter_lookup(&filt, kq, EVFILT_READ) == 0)
+			knote_delete_ident(filt, fd);
+		if (filter_lookup(&filt, kq, EVFILT_WRITE) == 0)
+			knote_delete_ident(filt, fd);
 		kqueue_unlock(kq);
 	}
 
