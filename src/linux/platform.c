@@ -204,6 +204,15 @@ linux_kevent_copyout(struct kqueue *kq, int nready,
         ev = &epevt_get()[i];
         kn = (struct knote *) ev->data.ptr;
         event = eventlist;
+        /*
+         * The knote may have been deleted or disabled by another thread
+         * after epoll_wait() returned it. Such a knote must not be
+         * delivered (the caller may already have freed its udata).
+         */
+        if ((kn->kn_flags & KNFL_KNOTE_DELETED) || (kn->kev.flags & EV_DISABLE)) {
+            nret--;
+            continue;
+        }
         if (kn->kev.filter == 0) {
             dbg_puts("kevent copyout for zero filter, discarding!");
             nret--;

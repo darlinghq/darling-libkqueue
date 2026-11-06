@@ -386,10 +386,20 @@ kevent64_impl(int kqfd, const struct kevent64_s *changelist, int nchanges,
     if ((flags & KEVENT_FLAG_ERROR_EVENTS) == 0 && nevents > 0) {
         const struct timespec* ts = (flags & KEVENT_FLAG_IMMEDIATE) ? (&timeout_zero) : timeout;
 again:
+        /*
+         * The events returned by kevent_wait() point at knotes. Another
+         * thread may delete one of them before we copy it out, so knotes
+         * queued for freeing are only reclaimed once no thread is waiting.
+         */
+        kqueue_lock(kq);
+        kq->kq_waiters++;
+        kqueue_unlock(kq);
+
         rv = kqops.kevent_wait(kq, nevents, ts);
         dbg_printf("kqops.kevent_wait returned %d", rv);
 
         kqueue_lock(kq);
+        kq->kq_waiters--;
         if (fastpath(rv > 0)) {
             rv = kqops.kevent_copyout(kq, rv, eventlist, nevents);
             ret += rv;

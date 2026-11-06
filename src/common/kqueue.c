@@ -115,6 +115,11 @@ kqueue_cmp(struct kqueue *a, struct kqueue *b)
 void kqueue_cleanup(struct kqueue* kq)
 {
     struct knote *next, *tmp;
+
+    /* A waiter may still hold a pointer to a knote on this list */
+    if (kq->kq_waiters != 0)
+        return;
+
     for (next = kq->kq_tofree.lh_first; next != NULL; next = tmp)
     {
         tmp = next->kn_entries2free.le_next;
@@ -303,6 +308,8 @@ static void _kqueue_close_atfork_cb(int kqfd, void* kqptr, void* private)
 
     // Mutexes are not valid after a fork, reset it to unlocked state
     tracing_mutex_init(&kq->kq_mtx, NULL);
+    // The threads that were waiting on it do not exist in the child
+    kq->kq_waiters = 0;
 
     kqueue_delref(kq);
 }

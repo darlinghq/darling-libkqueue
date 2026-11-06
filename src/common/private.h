@@ -161,6 +161,7 @@ struct kqueue {
 #endif
     RB_ENTRY(kqueue) entries;
     LIST_HEAD(knt2free, knote) kq_tofree;
+    unsigned int    kq_waiters; /* threads in kevent_wait(); protected by kq_mtx */
 };
 
 struct kqueue_vtable {
