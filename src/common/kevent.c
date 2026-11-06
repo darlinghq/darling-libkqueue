@@ -170,6 +170,22 @@ kevent_copyin_one(struct kqueue *kq, const struct kevent64_s *src)
         }
     }
 
+    /*
+     * EV_DELETE together with EV_DISPATCH2 on a disabled EV_DISPATCH2
+     * knote (typically one that has just been delivered) defers the
+     * deletion until the knote is enabled again, and reports EINPROGRESS
+     * (see EV_DISPATCH2 in <sys/event.h>). The owner of the udata may only
+     * reclaim it once the deletion has completed.
+     */
+    if ((src->flags & EV_DELETE) && !(src->flags & EV_ENABLE) &&
+            (src->flags & EV_DISPATCH2) == EV_DISPATCH2 &&
+            (kn->kev.flags & EV_DISPATCH2) == EV_DISPATCH2 &&
+            (kn->kev.flags & EV_DISABLE)) {
+        kn->kn_flags |= KNFL_DEFER_DELETE;
+        errno = EINPROGRESS;
+        return (-1);
+    }
+
     if ((src->flags & EV_DELETE) || ((kn->kn_flags & KNFL_DEFER_DELETE) && (src->flags & EV_ENABLE))) {
         rv = knote_delete(filt, kn);
         dbg_printf("knote_delete returned %d", rv);
