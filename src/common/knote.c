@@ -160,3 +160,15 @@ knote_disable(struct filter *filt, struct knote *kn)
 
 //TODO: knote_enable()
 
+void
+knote_delete_all(struct filter *filt)
+{
+    struct knote *kn, *next;
+
+    /* knote_delete() does not free the knote, so next stays valid */
+    for (kn = RB_MIN(knt, &filt->kf_knote); kn != NULL; kn = next) {
+        next = RB_NEXT(knt, &filt->kf_knote, kn);
+        knote_delete(filt, kn);
+    }
+}
+

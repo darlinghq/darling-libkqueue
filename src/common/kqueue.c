@@ -137,6 +137,7 @@ kqueue_free(struct kqueue *kq)
 	// XXX: we should be doing this more efficiently (i.e. without walking through all open kqueues)
 	map_foreach(kqmap, kqueue_free_cb, kq);
     filter_unregister_all(kq);
+    kqueue_cleanup(kq);
     kqops.kqueue_free(kq);
     free(kq);
 }
