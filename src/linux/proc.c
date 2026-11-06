@@ -60,14 +60,20 @@ evfilt_proc_copyout(struct kevent64_s *dst, struct knote *src, void *ptr)
 
 	// first, read the notification
 	rv = recv(src->kdata.kn_dupfd, &notification, sizeof(notification), 0);
-	if (rv < 0) {
+	if (rv <= 0) {
 		dbg_printf("evfilt_proc_copyout() reading notification failed: %d (%s)", errno, strerror(errno));
-		return -1;
+		dst->flags |= EV_EOF | EV_ONESHOT;
+		dst->fflags = NOTE_EXIT;
+		dst->data = 0;
+		return 0;
 	}
 
 	if (notification.header.number != dserver_kqchan_msgnum_notification) {
 		dbg_puts("evfilt_proc_copyout() read invalid notification");
-		return -1;
+		dst->flags |= EV_EOF | EV_ONESHOT;
+		dst->fflags = NOTE_EXIT;
+		dst->data = 0;
+		return 0;
 	}
 
 	// next, request the data
@@ -77,13 +83,19 @@ evfilt_proc_copyout(struct kevent64_s *dst, struct knote *src, void *ptr)
 	rv = send(src->kdata.kn_dupfd, &call, sizeof(call), 0);
 	if (rv < 0) {
 		dbg_printf("evfilt_proc_copyout() sending request failed: %d (%s)", errno, strerror(errno));
-		return -1;
+		dst->flags |= EV_EOF | EV_ONESHOT;
+		dst->fflags = NOTE_EXIT;
+		dst->data = 0;
+		return 0;
 	}
 
 	rv = recvmsg(src->kdata.kn_dupfd, &reply_msg, 0);
-	if (rv < 0) {
+	if (rv <= 0) {
 		dbg_printf("evfilt_proc_copyout() reading reply failed: %d (%s)", errno, strerror(errno));
-		return -1;
+		dst->flags |= EV_EOF | EV_ONESHOT;
+		dst->fflags = NOTE_EXIT;
+		dst->data = 0;
+		return 0;
 	}
 
 	if (reply.header.number != dserver_kqchan_msgnum_proc_read) {
@@ -222,7 +234,7 @@ evfilt_proc_knote_modify(struct filter *filt, struct knote *kn,
 	call.header.number = dserver_kqchan_msgnum_proc_modify;
 	call.header.pid = getpid();
 	call.header.tid = THREAD_ID;
-	call.flags = kn->data.events;
+	call.flags = kev->fflags;
 
 	rv = send(kn->kdata.kn_dupfd, &call, sizeof(call), 0);
 	if (rv < 0) {
