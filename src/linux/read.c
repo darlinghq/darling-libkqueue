@@ -215,6 +215,11 @@ evfilt_read_knote_modify(struct filter *filt, struct knote *kn,
     if (kn->kev.flags & EV_CLEAR)
         kn->data.events |= EPOLLET;
 
+    /* A disabled registration is absent from epoll. Its enable callback
+     * will add it after the update has been applied. */
+    if (kn->kev.flags & EV_DISABLE)
+        return (0);
+
     memset(&ev, 0, sizeof(ev));
     ev.events = kn->data.events;
     ev.data.ptr = kn;
