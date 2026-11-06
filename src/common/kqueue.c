@@ -56,6 +56,8 @@ get_fd_limit(void)
         dbg_perror("getrlimit(2)");
         return (65536);
     } else {
+        if (rlim.rlim_max > 65536)
+            return (65536);
         return (rlim.rlim_max);
     }
 #endif
@@ -113,6 +115,11 @@ kqueue_cmp(struct kqueue *a, struct kqueue *b)
 void kqueue_cleanup(struct kqueue* kq)
 {
     struct knote *next, *tmp;
+
+    /* A waiter may still hold a pointer to a knote on this list */
+    if (kq->kq_waiters != 0)
+        return;
+
     for (next = kq->kq_tofree.lh_first; next != NULL; next = tmp)
     {
         tmp = next->kn_entries2free.le_next;
@@ -135,6 +142,7 @@ kqueue_free(struct kqueue *kq)
 	// XXX: we should be doing this more efficiently (i.e. without walking through all open kqueues)
 	map_foreach(kqmap, kqueue_free_cb, kq);
     filter_unregister_all(kq);
+    kqueue_cleanup(kq);
     kqops.kqueue_free(kq);
     free(kq);
 }
@@ -210,15 +218,6 @@ kqueue_closed_fd(int fd)
 	if (kqmap == NULL)
 		return;
 
-	struct kevent64_s ev[2];
-
-	ev[0].ident = fd;
-	ev[0].flags = EV_DELETE | EV_RECEIPT;
-	ev[0].filter = EVFILT_READ;
-	ev[1].ident = fd;
-	ev[1].flags = EV_DELETE | EV_RECEIPT;
-	ev[1].filter = EVFILT_WRITE;
-
 	// we know it's not a kqueue FD (since kqueue_close() takes care of those),
 	// but it could be a fd inside a kqueue. Since we're creating duplicates of all fd's,
 	// we now have to walk through all known kqueues and remove the fd from them.
@@ -244,10 +243,14 @@ kqueue_closed_fd(int fd)
 	for (size_t i = 0; i < context.kq_count; ++i) {
 		struct kqueue* kq = context.kqs_to_check[i];
 
+		struct filter* filt;
+
 		kqueue_lock(kq);
-		// we don't care whether these operations succeed or not
-		kevent_copyin_one(kq, &ev[0]);
-		kevent_copyin_one(kq, &ev[1]);
+		// drop every registration of the fd, including udata-specific ones
+		if (filter_lookup(&filt, kq, EVFILT_READ) == 0)
+			knote_delete_ident(filt, fd);
+		if (filter_lookup(&filt, kq, EVFILT_WRITE) == 0)
+			knote_delete_ident(filt, fd);
 		kqueue_unlock(kq);
 	}
 
@@ -300,6 +303,8 @@ static void _kqueue_close_atfork_cb(int kqfd, void* kqptr, void* private)
 
     // Mutexes are not valid after a fork, reset it to unlocked state
     tracing_mutex_init(&kq->kq_mtx, NULL);
+    // The threads that were waiting on it do not exist in the child
+    kq->kq_waiters = 0;
 
     kqueue_delref(kq);
 }

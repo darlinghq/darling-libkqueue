@@ -125,11 +125,12 @@ filter_unregister_all(struct kqueue *kq)
         if (kq->kq_filt[i].kf_id == 0)
             continue;
 
+        /* Closing the queue tears down every registration still in it,
+         * including the descriptors and channels each knote owns. */
+        knote_delete_all(&kq->kq_filt[i]);
+
         if (kq->kq_filt[i].kf_destroy != NULL) 
             kq->kq_filt[i].kf_destroy(&kq->kq_filt[i]);
-
-        //XXX-FIXME
-        //knote_free_all(&kq->kq_filt[i]);
 
         if (kqops.filter_free != NULL)
             kqops.filter_free(kq, &kq->kq_filt[i]);

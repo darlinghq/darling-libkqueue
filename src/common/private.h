@@ -161,6 +161,7 @@ struct kqueue {
 #endif
     RB_ENTRY(kqueue) entries;
     LIST_HEAD(knt2free, knote) kq_tofree;
+    unsigned int    kq_waiters; /* threads in kevent_wait(); protected by kq_mtx */
 };
 
 struct kqueue_vtable {
@@ -197,15 +198,17 @@ int kevent_copyin_one(struct kqueue *kq, const struct kevent64_s *src);
 /*
  * knote internal API
  */
-struct knote * knote_lookup(struct filter *, uintptr_t);
+struct knote * knote_lookup(struct filter *, const struct kevent64_s *);
 //DEADWOOD: struct knote * knote_get_by_data(struct filter *filt, intptr_t);
 struct knote * knote_new(void);
 #define knote_retain(kn) atomic_inc(&kn->kn_ref)
 void knote_release(struct knote *);
 void knote_insert(struct filter *, struct knote *);
 int  knote_delete(struct filter *, struct knote *);
+void knote_delete_ident(struct filter *, uintptr_t);
 int  knote_init(void);
 int  knote_disable(struct filter *, struct knote *);
+void knote_delete_all(struct filter *);
 #define knote_get_filter(knt) &((knt)->kn_kq->kq_filt[(knt)->kev.filter])
 
 int         filter_lookup(struct filter **, struct kqueue *, short);

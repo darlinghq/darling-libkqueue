@@ -30,10 +30,36 @@ knote_init(void)
 //    return (mem_init(sizeof(struct knote), 1024));
 }
 
+/*
+ * EV_UDATA_SPECIFIC asks for a separate registration per udata value.
+ * This is supported for EVFILT_READ and EVFILT_WRITE, where every knote
+ * already owns its own duplicate of the descriptor in epoll.
+ */
+static int
+knote_udata_specific(const struct knote *kn)
+{
+    return ((kn->kev.filter == EVFILT_READ || kn->kev.filter == EVFILT_WRITE)
+            && (kn->kev.flags & EV_UDATA_SPECIFIC));
+}
+
 static int
 knote_cmp(struct knote *a, struct knote *b)
 {
-    return memcmp(&a->kev.ident, &b->kev.ident, sizeof(a->kev.ident)); 
+    int rv, as, bs;
+
+    rv = memcmp(&a->kev.ident, &b->kev.ident, sizeof(a->kev.ident));
+    if (rv != 0)
+        return (rv);
+
+    /* For one ident, the plain registration sorts before the udata-specific
+     * ones, which are ordered by udata. */
+    as = knote_udata_specific(a);
+    bs = knote_udata_specific(b);
+    if (as != bs)
+        return (as - bs);
+    if (as && a->kev.udata != b->kev.udata)
+        return ((a->kev.udata < b->kev.udata) ? -1 : 1);
+    return (0);
 }
 
 RB_GENERATE(knt, knote, kn_entries, knote_cmp)
@@ -94,7 +120,7 @@ knote_delete(struct filter *filt, struct knote *kn)
      * Verify that the knote wasn't removed by another
      * thread before we acquired the knotelist lock.
      */
-    query.kev.ident = kn->kev.ident;
+    query.kev = kn->kev;
     pthread_rwlock_wrlock(&filt->kf_knote_mtx);
     tmp = RB_FIND(knt, &filt->kf_knote, &query);
     if (tmp == kn) {
@@ -112,20 +138,49 @@ knote_delete(struct filter *filt, struct knote *kn)
 }
 
 struct knote *
-knote_lookup(struct filter *filt, uintptr_t ident)
+knote_lookup(struct filter *filt, const struct kevent64_s *kev)
 {
     struct knote query;
     struct knote *ent = NULL;
 
-    query.kev.ident = ident;
+    memset(&query, 0, sizeof(query));
+    query.kev.ident = kev->ident;
+    query.kev.filter = filt->kf_id;
+    query.kev.flags = kev->flags & EV_UDATA_SPECIFIC;
+    query.kev.udata = kev->udata;
 
     pthread_rwlock_rdlock(&filt->kf_knote_mtx);
     ent = RB_FIND(knt, &filt->kf_knote, &query);
     pthread_rwlock_unlock(&filt->kf_knote_mtx);
 
-    dbg_printf("id=%" PRIuPTR " ent=%p", ident, ent);
+    dbg_printf("id=%" PRIuPTR " ent=%p", (uintptr_t) kev->ident, ent);
 
     return (ent);
+}
+
+/* Delete every registration of ident in this filter, whatever its udata */
+void
+knote_delete_ident(struct filter *filt, uintptr_t ident)
+{
+    struct knote query;
+    struct knote *kn;
+
+    memset(&query, 0, sizeof(query));
+    query.kev.ident = ident;
+    query.kev.filter = filt->kf_id;
+
+    for (;;) {
+        /* The plain registration sorts first, so this finds the lowest
+         * knote for ident if there is any. */
+        pthread_rwlock_rdlock(&filt->kf_knote_mtx);
+        kn = RB_NFIND(knt, &filt->kf_knote, &query);
+        pthread_rwlock_unlock(&filt->kf_knote_mtx);
+
+        if (kn == NULL || kn->kev.ident != ident)
+            break;
+        if (knote_delete(filt, kn) < 0)
+            break;
+    }
 }
     
 #if DEADWOOD
@@ -159,4 +214,16 @@ knote_disable(struct filter *filt, struct knote *kn)
 }
 
 //TODO: knote_enable()
+
+void
+knote_delete_all(struct filter *filt)
+{
+    struct knote *kn, *next;
+
+    /* knote_delete() does not free the knote, so next stays valid */
+    for (kn = RB_MIN(knt, &filt->kf_knote); kn != NULL; kn = next) {
+        next = RB_NEXT(knt, &filt->kf_knote, kn);
+        knote_delete(filt, kn);
+    }
+}
 
