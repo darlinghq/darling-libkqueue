@@ -251,10 +251,15 @@ int
 evfilt_vnode_knote_modify(struct filter *filt, struct knote *kn, 
         const struct kevent64_s *kev)
 {
-    (void)filt;
-    (void)kn;
-    (void)kev;
-    return (-1); /* FIXME - STUB */
+    /* Re-adding the registration replaces the events it watches for. An
+       enabled knote gets a new watch with the new mask; a disabled one
+       has no watch, and enabling it creates one from the new flags. */
+    kn->kev.fflags = kev->fflags;
+    if (kn->kev.flags & EV_DISABLE)
+        return (0);
+    if (delete_watch(filt, kn) < 0)
+        return (-1);
+    return (add_watch(filt, kn));
 }
 
 int
