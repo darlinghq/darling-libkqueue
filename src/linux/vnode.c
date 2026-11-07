@@ -139,8 +139,9 @@ add_watch(struct filter *filt, struct knote *kn)
         mask |= IN_MODIFY | IN_ENTRY_EVENTS;
     if (kn->kev.fflags & NOTE_EXTEND)
         mask |= IN_MODIFY;
+    /* A truncation arrives as IN_MODIFY, see evfilt_vnode_copyout() */
     if (kn->kev.fflags & NOTE_ATTRIB)
-        mask |= IN_ATTRIB;
+        mask |= IN_ATTRIB | IN_MODIFY;
     /* A subdirectory's ".." is a link to its parent */
     if (kn->kev.fflags & NOTE_LINK)
         mask |= IN_ATTRIB | IN_ENTRY_EVENTS;
@@ -218,6 +219,7 @@ evfilt_vnode_copyout(struct kevent64_s *dst, struct knote *src, void *ptr UNUSED
     int moved_dir = 0;      /* a subdirectory was renamed from this directory... */
     uint32_t moved_cookie = 0; /* ...in the rename with this cookie */
     int attrib;
+    int truncated = 0;
     ssize_t n, off;
 
     n = read_events(buf, sizeof(buf), src->kdata.kn_inotifyfd);
@@ -295,14 +297,26 @@ evfilt_vnode_copyout(struct kevent64_s *dst, struct knote *src, void *ptr UNUSED
            NOTE_WRITE only */
         if (!S_ISDIR(sb.st_mode) && sb.st_size > src->data.vnode.size)
             fflags |= NOTE_EXTEND;
+        /* QUIRK: a truncation is reported as NOTE_ATTRIB, not NOTE_WRITE
+           (kqueue(2) does not say). inotify reports it as IN_MODIFY like a
+           write; a write never makes a file smaller, so a smaller file
+           after IN_MODIFY was truncated. Truncations that keep or grow
+           the size cannot be told apart from writes and stay NOTE_WRITE.
+           Evidence: black-box observation on macOS 27.0.1 arm64 (tier 2):
+           ftruncate() to a smaller size and open(O_TRUNC) give only
+           NOTE_ATTRIB with every vnode note requested.
+           Test: test_kevent_vnode_truncate_is_attrib (test/vnode.c) */
+        if (mask & IN_MODIFY && S_ISREG(sb.st_mode)
+            && sb.st_size < src->data.vnode.size)
+            truncated = 1;
         vnode_snapshot(src, &sb);
     }
 
-    if (mask & IN_MODIFY || entries)
+    if ((mask & IN_MODIFY && !truncated) || entries)
         fflags |= NOTE_WRITE;
     if (subdirs)
         fflags |= NOTE_LINK;
-    if (attrib)
+    if (attrib || truncated)
         fflags |= NOTE_ATTRIB;
     if (mask & IN_MOVE_SELF)
         fflags |= NOTE_RENAME;
