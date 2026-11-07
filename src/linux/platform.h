@@ -78,7 +78,8 @@ extern long int syscall (long int __sysno, ...);
         int kn_inotifyfd; \
         int kn_eventfd; \
         int kn_dupfd; \
-    } kdata
+    } kdata; \
+    int kn_sigeventfd; /* EVFILT_SIGNAL: counts signals taken by a handler */
 
 /*
  * Additional members of struct kqueue
