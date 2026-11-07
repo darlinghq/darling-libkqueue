@@ -21,6 +21,7 @@
 
 #ifdef DARLING
 #include "../darling/listenregistry.h"
+#include <sys/param.h>
 #endif
 
 /*
@@ -463,6 +464,28 @@ epoll_update(int op, struct filter *filt, struct knote *kn, struct epoll_event *
 int
 linux_fd_to_path(char *buf, size_t bufsz, int fd)
 {
+#ifdef DARLING
+    /*
+     * The callers pass the path to inotify, whose wrapper takes a guest
+     * path and translates it to the host path. readlink() on /proc/.../fd
+     * would return the host path, which would then be translated a second
+     * time. F_GETPATH returns the guest path.
+     */
+    char path[MAXPATHLEN];
+    size_t len;
+
+    if (fcntl(fd, F_GETPATH, path) < 0)
+        return (-1);
+
+    len = strlen(path);
+    if (len >= bufsz) {
+        errno = ENAMETOOLONG;
+        return (-1);
+    }
+
+    memcpy(buf, path, len + 1);
+    return ((int) len);
+#else
     char path[1024];    //TODO: Maxpathlen, etc.
 
     if (snprintf(&path[0], sizeof(path), "/proc/%d/fd/%d", getpid(), fd) < 0)
@@ -470,5 +493,6 @@ linux_fd_to_path(char *buf, size_t bufsz, int fd)
 
     memset(buf, 0, bufsz);
     return (readlink(path, buf, bufsz));
+#endif
 }
 

@@ -100,15 +100,22 @@ linux_evfilt_user_copyout(struct kevent64_s *dst, struct knote *src, void *ptr U
            other filters. */
         dst->flags &= ~EV_ADD;
     }
-    if (src->kev.flags & EV_CLEAR)
-        src->kev.fflags &= ~NOTE_TRIGGER;
+
+    /*
+     * A delivery consumes the trigger only for EV_CLEAR, EV_DISPATCH and
+     * EV_ONESHOT. Any other user event stays triggered (level), and its
+     * eventfd stays raised: it is reported on every wait until it is
+     * disabled or deleted.
+     *
+     * Lower the eventfd first and clear NOTE_TRIGGER only once that has
+     * worked, so that the flag never says "not triggered" while the
+     * eventfd is still raised.
+     */
     if (src->kev.flags & (EV_DISPATCH | EV_CLEAR | EV_ONESHOT)) {
         if (eventfd_lower(src->kdata.kn_eventfd) < 0)
             return (-1);
-    }
-
-    if (src->kev.flags & EV_DISPATCH)
         src->kev.fflags &= ~NOTE_TRIGGER;
+    }
 
     return (0);
 }
@@ -136,6 +143,10 @@ linux_evfilt_user_knote_create(struct filter *filt, struct knote *kn)
     }
 
     kn->kdata.kn_eventfd = evfd;
+
+    if (kn->kev.fflags & NOTE_TRIGGER) {
+        eventfd_raise(evfd);
+    }
 
     return (0);
 
@@ -206,8 +217,8 @@ linux_evfilt_user_knote_delete(struct filter *filt, struct knote *kn)
 int
 linux_evfilt_user_knote_enable(struct filter *filt, struct knote *kn)
 {
-    /* FIXME: what happens if NOTE_TRIGGER is in fflags?
-       should the event fire? */
+    /* A registration that is still triggered fires again once enabled;
+       knote_create() raises the eventfd for NOTE_TRIGGER. */
     return linux_evfilt_user_knote_create(filt, kn);
 }
 

@@ -31,7 +31,7 @@ if (DARLING)
 	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -nostdinc -DHAVE_SYS_EVENTFD_H -DHAVE_SYS_SIGNALFD_H -DHAVE_SYS_TIMERFD_H -ggdb -O0")
 
 	#add_definitions(-DKERNEL_PRIVATE)
-	#add_definitions(-Dkqueue=kqueue_impl -Dkevent=kevent_impl -Dkevent64=kevent64_impl)
+	add_definitions(-Dkqueue=kqueue_impl -Dkevent=kevent_impl -Dkevent64=kevent64_impl)
 	#add_definitions(-Dclose=__close_for_kqueue)
 endif (DARLING)
 
