@@ -262,12 +262,6 @@ evfilt_vnode_copyout(struct kevent64_s *dst, struct knote *src, void *ptr UNUSED
     if (moved_dir)
         subdirs = 1;
 
-    if (mask & IN_IGNORED) {
-        /* TODO: possibly return error when fs is unmounted */
-        dst->filter = EVFILT_DROP;
-        return (0);
-    }
-
     kevent_int_to_64(&src->kev, dst);
     dst->data = 0;
 
@@ -322,6 +316,12 @@ evfilt_vnode_copyout(struct kevent64_s *dst, struct knote *src, void *ptr UNUSED
         fflags |= NOTE_RENAME;
     if (mask & IN_DELETE_SELF)
         fflags |= NOTE_DELETE;
+#ifdef NOTE_REVOKE
+    /* inotify always reports an unmount, then IN_IGNORED as the watch
+       goes away; IN_IGNORED itself is not reported */
+    if (mask & IN_UNMOUNT)
+        fflags |= NOTE_REVOKE;
+#endif
 
     /* Report only the requested events that happened (an IN_ATTRIB may be
        seen only because inotify needs a mask, or nothing was queued) */
