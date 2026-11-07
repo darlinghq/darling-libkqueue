@@ -42,7 +42,8 @@ const struct kqueue_vtable kqops = {
     linux_eventfd_close,
     linux_eventfd_raise,
     linux_eventfd_lower,
-    linux_eventfd_descriptor
+    linux_eventfd_descriptor,
+    linux_kqueue_atfork
 };
 
 static void tls_setup(void)
@@ -93,8 +94,25 @@ linux_kqueue_init(struct kqueue *kq)
 void
 linux_kqueue_free(struct kqueue *kq UNUSED)
 {
-    __close_for_kqueue(kq->kq_id);
+    /* -1 after linux_kqueue_atfork() */
+    if (kq->kq_id >= 0)
+        __close_for_kqueue(kq->kq_id);
     // abort();//FIXME
+}
+
+void
+linux_kqueue_atfork(struct kqueue *kq)
+{
+    /*
+     * A forked child inherits the epoll descriptor, but it refers to the
+     * same epoll instance as the parent's. Removing the knotes from it while
+     * the child frees the kqueue would remove them from the parent's kqueue
+     * too, and the parent would stop receiving their events. Drop the
+     * child's reference to the instance instead; the deletes that follow
+     * then leave it untouched.
+     */
+    (void) __close_for_kqueue(kq->kq_id);
+    kq->kq_id = -1;
 }
 
 static int

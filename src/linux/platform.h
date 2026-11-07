@@ -89,6 +89,7 @@ extern long int syscall (long int __sysno, ...);
 
 int     linux_kqueue_init(struct kqueue *);
 void    linux_kqueue_free(struct kqueue *);
+void    linux_kqueue_atfork(struct kqueue *);
 
 int     linux_kevent_wait(struct kqueue *, int, const struct timespec *);
 int     linux_kevent_copyout(struct kqueue *, int, struct kevent64_s *, int);
