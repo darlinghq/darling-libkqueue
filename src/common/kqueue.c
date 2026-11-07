@@ -306,6 +306,12 @@ static void _kqueue_close_atfork_cb(int kqfd, void* kqptr, void* private)
     // The threads that were waiting on it do not exist in the child
     kq->kq_waiters = 0;
 
+    // The kernel objects backing the kqueue are shared with the parent,
+    // which keeps using them. Detach from them before the teardown below,
+    // so that it releases only the child's copies.
+    if (kqops.kqueue_atfork != NULL)
+        kqops.kqueue_atfork(kq);
+
     kqueue_delref(kq);
 }
 

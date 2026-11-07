@@ -184,6 +184,9 @@ struct kqueue_vtable {
     int  (*eventfd_raise)(struct eventfd *);
     int  (*eventfd_lower)(struct eventfd *);
     int  (*eventfd_descriptor)(struct eventfd *);
+    // Called in a fork child before the inherited kqueue is freed.
+    // Optional (may be NULL).
+    void (*kqueue_atfork)(struct kqueue *);
 };
 extern const struct kqueue_vtable kqops;
 
