@@ -59,6 +59,39 @@ inotify_event_dump(struct inotify_event *evt)
 #endif /* !NDEBUG */
 
 
+#ifdef __APPLE__
+# define VNODE_MTIME(sb) ((sb)->st_mtimespec)
+#else
+# define VNODE_MTIME(sb) ((sb)->st_mtim)
+#endif
+
+/* Remember the state of the vnode that the next events are compared to */
+static void
+vnode_snapshot(struct knote *kn, const struct stat *sb)
+{
+    kn->data.vnode.nlink = sb->st_nlink;
+    kn->data.vnode.size = sb->st_size;
+    kn->data.vnode.mode = sb->st_mode;
+    kn->data.vnode.uid = sb->st_uid;
+    kn->data.vnode.gid = sb->st_gid;
+    kn->data.vnode.mtime_sec = VNODE_MTIME(sb).tv_sec;
+    kn->data.vnode.mtime_nsec = VNODE_MTIME(sb).tv_nsec;
+}
+
+/* Whether an attribute other than the link count and size changed */
+static int
+vnode_attrs_changed(const struct knote *kn, const struct stat *sb)
+{
+    return (sb->st_mode != kn->data.vnode.mode
+            || sb->st_uid != kn->data.vnode.uid
+            || sb->st_gid != kn->data.vnode.gid
+            || VNODE_MTIME(sb).tv_sec != kn->data.vnode.mtime_sec
+            || VNODE_MTIME(sb).tv_nsec != kn->data.vnode.mtime_nsec);
+}
+
+/* Changes to the entries of a watched directory */
+#define IN_ENTRY_EVENTS (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)
+
 /* Read every event queued on the (nonblocking) inotify descriptor into buf.
    Returns the byte count, 0 if nothing is queued, -1 on error. */
 static ssize_t
@@ -100,13 +133,18 @@ add_watch(struct filter *filt, struct knote *kn)
     mask = 0;
     if (kn->kev.fflags & NOTE_DELETE)
         mask |= IN_ATTRIB | IN_DELETE_SELF;
-    if (kn->kev.fflags & NOTE_WRITE)      
-        mask |= IN_MODIFY | IN_ATTRIB;
+    /* Adding, removing or renaming an entry of a directory writes to the
+       directory; inotify reports those only for directories. */
+    if (kn->kev.fflags & NOTE_WRITE)
+        mask |= IN_MODIFY | IN_ENTRY_EVENTS;
     if (kn->kev.fflags & NOTE_EXTEND)
-        mask |= IN_MODIFY | IN_ATTRIB;
-    if ((kn->kev.fflags & NOTE_ATTRIB) || 
-            (kn->kev.fflags & NOTE_LINK))
-        mask |= IN_ATTRIB;
+        mask |= IN_MODIFY;
+    /* A truncation arrives as IN_MODIFY, see evfilt_vnode_copyout() */
+    if (kn->kev.fflags & NOTE_ATTRIB)
+        mask |= IN_ATTRIB | IN_MODIFY;
+    /* A subdirectory's ".." is a link to its parent */
+    if (kn->kev.fflags & NOTE_LINK)
+        mask |= IN_ATTRIB | IN_ENTRY_EVENTS;
     if (kn->kev.fflags & NOTE_RENAME)
         mask |= IN_MOVE_SELF;
     /* No IN_ONESHOT: it would consume the watch on an event that copyout
@@ -174,7 +212,14 @@ evfilt_vnode_copyout(struct kevent64_s *dst, struct knote *src, void *ptr UNUSED
     char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
     struct inotify_event *evt;
     struct stat sb;
-    uint32_t mask = 0;
+    uint32_t mask = 0;      /* events of the vnode itself */
+    uint32_t fflags = 0;
+    int entries = 0;        /* an entry of the directory changed */
+    int subdirs = 0;        /* a subdirectory was added or removed */
+    int moved_dir = 0;      /* a subdirectory was renamed from this directory... */
+    uint32_t moved_cookie = 0; /* ...in the rename with this cookie */
+    int attrib;
+    int truncated = 0;
     ssize_t n, off;
 
     n = read_events(buf, sizeof(buf), src->kdata.kn_inotifyfd);
@@ -183,48 +228,104 @@ evfilt_vnode_copyout(struct kevent64_s *dst, struct knote *src, void *ptr UNUSED
     for (off = 0; off + (ssize_t) sizeof(*evt) <= n; off += sizeof(*evt) + evt->len) {
         evt = (struct inotify_event *) (buf + off);
         dbg_printf("inotify event: %s", inotify_event_dump(evt));
-        mask |= evt->mask;
-    }
+        if (evt->len == 0) {
+            mask |= evt->mask;
+            continue;
+        }
 
-    if (mask & IN_IGNORED) {
-        /* TODO: possibly return error when fs is unmounted */
-        dst->filter = EVFILT_DROP;
-        return (0);
+        /* A named event is about an entry of the watched directory. Writes
+           to and attribute changes of the entries are not events of the
+           directory; only adding, removing and renaming entries are. */
+        if (!(evt->mask & IN_ENTRY_EVENTS))
+            continue;
+        entries = 1;
+        if (!(evt->mask & IN_ISDIR))
+            continue;
+
+        /* Adding or removing a subdirectory changes the directory's link
+           count; renaming one within the directory does not. The two
+           halves of such a rename are queued next to each other. */
+        if ((evt->mask & IN_MOVED_TO) && moved_dir && evt->cookie == moved_cookie) {
+            moved_dir = 0;
+            continue;
+        }
+        if (moved_dir)
+            subdirs = 1;
+        moved_dir = 0;
+        if (evt->mask & IN_MOVED_FROM) {
+            moved_dir = 1;
+            moved_cookie = evt->cookie;
+        } else {
+            subdirs = 1;
+        }
     }
+    if (moved_dir)
+        subdirs = 1;
 
     kevent_int_to_64(&src->kev, dst);
     dst->data = 0;
-    dst->fflags = 0; /* report only what happened, not what was requested */
 
     /* No error checking because fstat(2) should rarely fail */
     //FIXME: EINTR
-    if ((mask & IN_ATTRIB || mask & IN_MODIFY) 
+    attrib = mask & IN_ATTRIB;
+    if ((mask & (IN_ATTRIB | IN_MODIFY) || entries)
         && fstat(src->kev.ident, &sb) == 0) {
-        if (sb.st_nlink == 0 && src->kev.fflags & NOTE_DELETE) 
-            dst->fflags |= NOTE_DELETE;
-        if (sb.st_nlink != src->data.vnode.nlink && src->kev.fflags & NOTE_LINK) 
-            dst->fflags |= NOTE_LINK;
+        if (sb.st_nlink != src->data.vnode.nlink) {
+            fflags |= NOTE_LINK;
+            /* inotify reports a link count change as IN_ATTRIB; it is an
+               attribute change only if something else changed too */
+            if (!vnode_attrs_changed(src, &sb))
+                attrib = 0;
+        }
+        /* Removing any name of a file is an unlink() of it, while a
+           directory's link count also drops when a subdirectory is
+           removed */
+        if (sb.st_nlink == 0
+            || (!S_ISDIR(sb.st_mode) && sb.st_nlink < src->data.vnode.nlink))
+            fflags |= NOTE_DELETE;
 #if HAVE_NOTE_TRUNCATE
-        if (sb.st_nsize == 0 && src->kev.fflags & NOTE_TRUNCATE) 
-            dst->fflags |= NOTE_TRUNCATE;
+        if (sb.st_nsize == 0)
+            fflags |= NOTE_TRUNCATE;
 #endif
-        if (sb.st_size > src->data.vnode.size && src->kev.fflags & NOTE_EXTEND) 
-            dst->fflags |= NOTE_EXTEND;
-        src->data.vnode.nlink = sb.st_nlink;
-        src->data.vnode.size = sb.st_size;
+        /* A directory grows with its entries, which is reported as
+           NOTE_WRITE only */
+        if (!S_ISDIR(sb.st_mode) && sb.st_size > src->data.vnode.size)
+            fflags |= NOTE_EXTEND;
+        /* QUIRK: a truncation is reported as NOTE_ATTRIB, not NOTE_WRITE
+           (kqueue(2) does not say). inotify reports it as IN_MODIFY like a
+           write; a write never makes a file smaller, so a smaller file
+           after IN_MODIFY was truncated. Truncations that keep or grow
+           the size cannot be told apart from writes and stay NOTE_WRITE.
+           Evidence: black-box observation on macOS 27.0.1 arm64 (tier 2):
+           ftruncate() to a smaller size and open(O_TRUNC) give only
+           NOTE_ATTRIB with every vnode note requested.
+           Test: test_kevent_vnode_truncate_is_attrib (test/vnode.c) */
+        if (mask & IN_MODIFY && S_ISREG(sb.st_mode)
+            && sb.st_size < src->data.vnode.size)
+            truncated = 1;
+        vnode_snapshot(src, &sb);
     }
 
-    if (mask & IN_MODIFY && src->kev.fflags & NOTE_WRITE) 
-        dst->fflags |= NOTE_WRITE;
-    if (mask & IN_ATTRIB && src->kev.fflags & NOTE_ATTRIB) 
-        dst->fflags |= NOTE_ATTRIB;
-    if (mask & IN_MOVE_SELF && src->kev.fflags & NOTE_RENAME) 
-        dst->fflags |= NOTE_RENAME;
-    if (mask & IN_DELETE_SELF && src->kev.fflags & NOTE_DELETE) 
-        dst->fflags |= NOTE_DELETE;
+    if ((mask & IN_MODIFY && !truncated) || entries)
+        fflags |= NOTE_WRITE;
+    if (subdirs)
+        fflags |= NOTE_LINK;
+    if (attrib || truncated)
+        fflags |= NOTE_ATTRIB;
+    if (mask & IN_MOVE_SELF)
+        fflags |= NOTE_RENAME;
+    if (mask & IN_DELETE_SELF)
+        fflags |= NOTE_DELETE;
+#ifdef NOTE_REVOKE
+    /* inotify always reports an unmount, then IN_IGNORED as the watch
+       goes away; IN_IGNORED itself is not reported */
+    if (mask & IN_UNMOUNT)
+        fflags |= NOTE_REVOKE;
+#endif
 
-    /* Nothing requested happened (e.g. an IN_ATTRIB seen only for the mask,
-       or nothing queued at all) */
+    /* Report only the requested events that happened (an IN_ATTRIB may be
+       seen only because inotify needs a mask, or nothing was queued) */
+    dst->fflags = fflags & src->kev.fflags;
     if (dst->fflags == 0)
         dst->filter = EVFILT_DROP;
 
@@ -240,8 +341,7 @@ evfilt_vnode_knote_create(struct filter *filt, struct knote *kn)
         dbg_puts("fstat failed");
         return (-1);
     }
-    kn->data.vnode.nlink = sb.st_nlink;
-    kn->data.vnode.size = sb.st_size;
+    vnode_snapshot(kn, &sb);
     kn->kev.data = -1;
 
     return (add_watch(filt, kn));
