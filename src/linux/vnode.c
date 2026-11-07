@@ -59,6 +59,36 @@ inotify_event_dump(struct inotify_event *evt)
 #endif /* !NDEBUG */
 
 
+#ifdef __APPLE__
+# define VNODE_MTIME(sb) ((sb)->st_mtimespec)
+#else
+# define VNODE_MTIME(sb) ((sb)->st_mtim)
+#endif
+
+/* Remember the state of the vnode that the next events are compared to */
+static void
+vnode_snapshot(struct knote *kn, const struct stat *sb)
+{
+    kn->data.vnode.nlink = sb->st_nlink;
+    kn->data.vnode.size = sb->st_size;
+    kn->data.vnode.mode = sb->st_mode;
+    kn->data.vnode.uid = sb->st_uid;
+    kn->data.vnode.gid = sb->st_gid;
+    kn->data.vnode.mtime_sec = VNODE_MTIME(sb).tv_sec;
+    kn->data.vnode.mtime_nsec = VNODE_MTIME(sb).tv_nsec;
+}
+
+/* Whether an attribute other than the link count and size changed */
+static int
+vnode_attrs_changed(const struct knote *kn, const struct stat *sb)
+{
+    return (sb->st_mode != kn->data.vnode.mode
+            || sb->st_uid != kn->data.vnode.uid
+            || sb->st_gid != kn->data.vnode.gid
+            || VNODE_MTIME(sb).tv_sec != kn->data.vnode.mtime_sec
+            || VNODE_MTIME(sb).tv_nsec != kn->data.vnode.mtime_nsec);
+}
+
 /* Changes to the entries of a watched directory */
 #define IN_ENTRY_EVENTS (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)
 
@@ -187,6 +217,7 @@ evfilt_vnode_copyout(struct kevent64_s *dst, struct knote *src, void *ptr UNUSED
     int subdirs = 0;        /* a subdirectory was added or removed */
     int moved_dir = 0;      /* a subdirectory was renamed from this directory... */
     uint32_t moved_cookie = 0; /* ...in the rename with this cookie */
+    int attrib;
     ssize_t n, off;
 
     n = read_events(buf, sizeof(buf), src->kdata.kn_inotifyfd);
@@ -240,12 +271,22 @@ evfilt_vnode_copyout(struct kevent64_s *dst, struct knote *src, void *ptr UNUSED
 
     /* No error checking because fstat(2) should rarely fail */
     //FIXME: EINTR
+    attrib = mask & IN_ATTRIB;
     if ((mask & (IN_ATTRIB | IN_MODIFY) || entries)
         && fstat(src->kev.ident, &sb) == 0) {
-        if (sb.st_nlink == 0)
-            fflags |= NOTE_DELETE;
-        if (sb.st_nlink != src->data.vnode.nlink)
+        if (sb.st_nlink != src->data.vnode.nlink) {
             fflags |= NOTE_LINK;
+            /* inotify reports a link count change as IN_ATTRIB; it is an
+               attribute change only if something else changed too */
+            if (!vnode_attrs_changed(src, &sb))
+                attrib = 0;
+        }
+        /* Removing any name of a file is an unlink() of it, while a
+           directory's link count also drops when a subdirectory is
+           removed */
+        if (sb.st_nlink == 0
+            || (!S_ISDIR(sb.st_mode) && sb.st_nlink < src->data.vnode.nlink))
+            fflags |= NOTE_DELETE;
 #if HAVE_NOTE_TRUNCATE
         if (sb.st_nsize == 0)
             fflags |= NOTE_TRUNCATE;
@@ -254,15 +295,14 @@ evfilt_vnode_copyout(struct kevent64_s *dst, struct knote *src, void *ptr UNUSED
            NOTE_WRITE only */
         if (!S_ISDIR(sb.st_mode) && sb.st_size > src->data.vnode.size)
             fflags |= NOTE_EXTEND;
-        src->data.vnode.nlink = sb.st_nlink;
-        src->data.vnode.size = sb.st_size;
+        vnode_snapshot(src, &sb);
     }
 
     if (mask & IN_MODIFY || entries)
         fflags |= NOTE_WRITE;
     if (subdirs)
         fflags |= NOTE_LINK;
-    if (mask & IN_ATTRIB)
+    if (attrib)
         fflags |= NOTE_ATTRIB;
     if (mask & IN_MOVE_SELF)
         fflags |= NOTE_RENAME;
@@ -287,8 +327,7 @@ evfilt_vnode_knote_create(struct filter *filt, struct knote *kn)
         dbg_puts("fstat failed");
         return (-1);
     }
-    kn->data.vnode.nlink = sb.st_nlink;
-    kn->data.vnode.size = sb.st_size;
+    vnode_snapshot(kn, &sb);
     kn->kev.data = -1;
 
     return (add_watch(filt, kn));

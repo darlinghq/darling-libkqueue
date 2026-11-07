@@ -90,6 +90,11 @@ struct knote {
         struct {
             nlink_t   nlink;  /* Used by vnode */
             off_t     size;   /* Used by vnode */
+            mode_t    mode;   /* Used by vnode */
+            uid_t     uid;    /* Used by vnode */
+            gid_t     gid;    /* Used by vnode */
+            time_t    mtime_sec;  /* Used by vnode */
+            long      mtime_nsec; /* Used by vnode */
         } vnode;
         timer_t       timerid;  
         struct sleepreq *sleepreq; /* Used by posix/timer.c */
