@@ -88,6 +88,8 @@ void test_evfilt_proc(struct test_context *);
 #ifdef EVFILT_USER
 void test_evfilt_user(struct test_context *);
 #endif
+void test_evfilt_receipt(struct test_context *);
+void test_evfilt_socket_filters(struct test_context *);
 
 #define test(f,ctx,...) do {                                            \
     assert(ctx != NULL); \

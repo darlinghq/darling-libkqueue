@@ -26,6 +26,8 @@ if(UNIX)
         timer.c
         vnode.c
         user.c
+        receipt-no-output.c
+        socket-independent-filters.c
     )
 else()
     set(SRC

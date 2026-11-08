@@ -1,8 +1,10 @@
-#include <sys/event.h>
-#include <sys/time.h>
-#include <unistd.h>
-#include <errno.h>
-#include <stdio.h>
+/*
+ * A successful EV_RECEIPT change needs output space only to report its
+ * receipt: with no room left, kevent() keeps applying the remaining changes
+ * and returns the number of receipts it stored. A failing change still
+ * returns -1 with errno set.
+ */
+#include "common.h"
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"line %d: %s (errno %d)\n",__LINE__,#x,errno); return 1; } } while(0)
 static int registrations(int capacity) {
@@ -34,8 +36,9 @@ static int registrations(int capacity) {
     close(a[0]);close(a[1]);close(b[0]);close(b[1]);close(kq);
     return 0;
 }
-int main(void) {
-    if(registrations(0) || registrations(1) || registrations(2)) return 1;
-    puts("EV_RECEIPT empty, partial and full output capacity passed");
-    return 0;
+void
+test_evfilt_receipt(struct test_context *ctx) {
+    (void) ctx;
+    if(registrations(0) || registrations(1) || registrations(2))
+        die("EV_RECEIPT with empty, partial or full output capacity");
 }

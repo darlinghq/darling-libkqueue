@@ -1,13 +1,10 @@
-#include <errno.h>
-#include <fcntl.h>
+/*
+ * EVFILT_READ and EVFILT_WRITE on one socket are independent registrations
+ * with their own user data and state, and closing the socket or the kqueue
+ * releases everything the registrations hold.
+ */
+#include "common.h"
 #include <netinet/in.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/event.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
 #define CHECK(x)                                                               \
   do {                                                                         \
     if (!(x)) {                                                                \
@@ -142,7 +139,7 @@ static int regular_file_cleanup(void) {
   return 0;
 }
 
-int main(void) {
+static int independent_filters(void) {
   if (exercise(0) || exercise(1) || regular_file_cleanup())
     return 1;
   int before = descriptors();
@@ -164,7 +161,11 @@ int main(void) {
     close(peer);
   }
   CHECK(descriptors() == before);
-  puts("Independent read/write filters, transitions, close and descriptor "
-       "cleanup passed");
   return 0;
+}
+
+void test_evfilt_socket_filters(struct test_context *ctx) {
+  (void)ctx;
+  if (independent_filters())
+    die("independent socket read and write filters");
 }
