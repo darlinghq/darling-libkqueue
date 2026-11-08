@@ -129,6 +129,37 @@ test_kevent_socket_get(struct test_context *ctx)
         die("kevent:2");
 }
 
+/* The event reports the number of bytes ready, whatever data value was
+ * given when the filter was registered. */
+void
+test_kevent_socket_get_data_count(struct test_context *ctx)
+{
+    struct kevent kev, ret;
+
+    EV_SET(&kev, ctx->client_fd, EVFILT_READ, EV_ADD, 0, -1, &ctx->client_fd);
+    if (kevent(ctx->kqfd, &kev, 1, NULL, 0, NULL) < 0)
+        die("kevent:1");
+
+    kevent_socket_fill(ctx);
+    kevent_socket_fill(ctx);
+
+    kevent_get(&ret, ctx->kqfd);
+    if (ret.ident != (uintptr_t) ctx->client_fd || ret.filter != EVFILT_READ)
+        die("unexpected event");
+    if (ret.data != 2) {
+        printf("expected data 2, got %lld\n", (long long) ret.data);
+        die("wrong data");
+    }
+
+    kevent_socket_drain(ctx);
+    kevent_socket_drain(ctx);
+    test_no_kevents(ctx->kqfd);
+
+    kev.flags = EV_DELETE;
+    if (kevent(ctx->kqfd, &kev, 1, NULL, 0, NULL) < 0)
+        die("kevent:2");
+}
+
 void
 test_kevent_socket_clear(struct test_context *ctx)
 {
@@ -428,6 +459,7 @@ test_evfilt_read(struct test_context *ctx)
     test(kevent_socket_del, ctx);
     test(kevent_socket_add_without_ev_add, ctx);
     test(kevent_socket_get, ctx);
+    test(kevent_socket_get_data_count, ctx);
     test(kevent_socket_disable_and_enable, ctx);
     test(kevent_socket_oneshot, ctx);
     test(kevent_socket_clear, ctx);
