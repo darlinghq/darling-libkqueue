@@ -193,7 +193,8 @@ usage(void)
     printf("usage: [-hn] [testclass ...]\n"
            " -h        This message\n"
            " -n        Number of iterations (default: 1)\n"
-           " testclass Tests suites to run: [socket signal timer vnode user]\n"
+           " testclass Tests suites to run: [socket signal timer vnode user receipt\n"
+           "           socket-filters]\n"
            "           All tests are run by default\n"
            "\n"
           );
@@ -218,6 +219,10 @@ main(int argc, char **argv)
 #endif
 #ifdef EVFILT_USER
         { "user", 1, test_evfilt_user },
+#endif
+#ifndef _WIN32
+        { "receipt", 1, test_evfilt_receipt },
+        { "socket-filters", 1, test_evfilt_socket_filters },
 #endif
         { NULL, 0, NULL },
     };

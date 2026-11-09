@@ -264,9 +264,12 @@ err_path:
             nevents--;
             eventlist++;
             nret++;
-        } else {
+        } else if (status != 0) {
+            errno = status;
             return (-1);
         }
+        /* A successful receipt needs output space only to report it. Keep
+         * applying changes when the caller requests no more output events. */
     }
 
     return (nret);

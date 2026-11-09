@@ -3,7 +3,7 @@
 program=libkqueue-test
 version=0.1
 cflags="-g -O0 -Wall -Werror -Wl,-rpath,.."
-sources="main.c kevent.c test.c proc.c read.c signal.c timer.c vnode.c"
+sources="main.c kevent.c test.c proc.c read.c signal.c timer.c vnode.c receipt-no-output.c socket-independent-filters.c"
 
 pre_configure_hook() {
  
