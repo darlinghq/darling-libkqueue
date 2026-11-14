@@ -149,7 +149,7 @@ knote_free_all_atfork(struct filter *filt)
     while ((kn = RB_ROOT(&filt->kf_knote)) != NULL) {
         RB_REMOVE(knt, &filt->kf_knote, kn);
         if (filt->kf_id == EVFILT_TIMER) {
-            if (kn->data.pfd > 0) {
+            if (kn->data.pfd >= 0) {
                 (void) __close_for_kqueue(kn->data.pfd);
                 kn->data.pfd = -1;
             }
