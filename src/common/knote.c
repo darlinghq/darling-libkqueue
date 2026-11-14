@@ -160,7 +160,11 @@ knote_free_all_atfork(struct filter *filt)
                    filt->kf_id == EVFILT_USER ||
                    filt->kf_id == EVFILT_SIGNAL ||
                    filt->kf_id == EVFILT_VNODE) {
-            if (kn->kdata.kn_dupfd > 0) {
+            /* kdata is one union shared by every filter above (eventfd,
+             * dupfd, signalfd, inotifyfd). Only created knotes are in the
+             * tree, and every create/delete path leaves a valid fd or -1,
+             * so descriptor 0 is a real descriptor to close. */
+            if (kn->kdata.kn_dupfd >= 0) {
                 (void) __close_for_kqueue(kn->kdata.kn_dupfd);
                 kn->kdata.kn_dupfd = -1;
             }
