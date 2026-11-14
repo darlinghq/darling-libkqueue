@@ -301,6 +301,8 @@ static void _kqueue_close_atfork_cb(int kqfd, void* kqptr, void* private)
 {
 	struct kqueue* kq = (struct kqueue*) kqptr;
 
+    int i;
+
     // Mutexes are not valid after a fork, reset it to unlocked state
     tracing_mutex_init(&kq->kq_mtx, NULL);
     // The threads that were waiting on it do not exist in the child
@@ -312,7 +314,20 @@ static void _kqueue_close_atfork_cb(int kqfd, void* kqptr, void* private)
     if (kqops.kqueue_atfork != NULL)
         kqops.kqueue_atfork(kq);
 
-    kqueue_delref(kq);
+    /* Drop all kqmap slots pointing to this kqueue in the child, even when a
+     * parent thread held an active kevent64_impl reference across fork(). */
+    map_foreach(kqmap, kqueue_free_cb, kq);
+
+    for (i = 0; i < EVFILT_SYSCOUNT; i++) {
+        if (kq->kq_filt[i].kf_id == 0)
+            continue;
+        knote_free_all_atfork(&kq->kq_filt[i]);
+    }
+    memset(&kq->kq_filt[0], 0, sizeof(kq->kq_filt));
+
+    kqueue_cleanup(kq);
+    kqops.kqueue_free(kq);
+    free(kq);
 }
 
 void VISIBLE kqueue_atfork(void)

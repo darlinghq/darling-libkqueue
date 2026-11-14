@@ -137,6 +137,39 @@ knote_delete(struct filter *filt, struct knote *kn)
     return (0);
 }
 
+void
+knote_free_all_atfork(struct filter *filt)
+{
+    struct knote *kn;
+
+    /* In a forked child, kq->kq_id still shares the parent's kernel eventpoll
+     * instance. Never call epoll_ctl(EPOLL_CTL_DEL) or acquire kf_knote_mtx
+     * here: only close the child's duplicated helper descriptors and free
+     * child-local memory. */
+    while ((kn = RB_ROOT(&filt->kf_knote)) != NULL) {
+        RB_REMOVE(knt, &filt->kf_knote, kn);
+        if (filt->kf_id == EVFILT_TIMER) {
+            if (kn->data.pfd > 0) {
+                (void) __close_for_kqueue(kn->data.pfd);
+                kn->data.pfd = -1;
+            }
+        } else if (filt->kf_id == EVFILT_READ ||
+                   filt->kf_id == EVFILT_WRITE ||
+                   filt->kf_id == EVFILT_MACHPORT ||
+                   filt->kf_id == EVFILT_PROC ||
+                   filt->kf_id == EVFILT_USER ||
+                   filt->kf_id == EVFILT_SIGNAL ||
+                   filt->kf_id == EVFILT_VNODE) {
+            if (kn->kdata.kn_dupfd > 0) {
+                (void) __close_for_kqueue(kn->kdata.kn_dupfd);
+                kn->kdata.kn_dupfd = -1;
+            }
+        }
+        free(kn);
+    }
+    pthread_rwlock_init(&filt->kf_knote_mtx, NULL);
+}
+
 struct knote *
 knote_lookup(struct filter *filt, const struct kevent64_s *kev)
 {

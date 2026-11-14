@@ -213,6 +213,7 @@ struct knote * knote_new(void);
 void knote_release(struct knote *);
 void knote_insert(struct filter *, struct knote *);
 int  knote_delete(struct filter *, struct knote *);
+void knote_free_all_atfork(struct filter *);
 void knote_delete_ident(struct filter *, uintptr_t);
 int  knote_init(void);
 int  knote_disable(struct filter *, struct knote *);
