@@ -63,7 +63,20 @@ int timerfd_gettime(int ufc, struct itimerspec *otmr)
 
 #endif
 
+#define LINUX_CLOCK_REALTIME 0
 #define LINUX_CLOCK_MONOTONIC 1
+#define LINUX_CLOCK_BOOTTIME 7
+#define LINUX_TFD_TIMER_ABSTIME 1
+
+#ifndef NOTE_MACH_CONTINUOUS_TIME
+#define NOTE_MACH_CONTINUOUS_TIME 0x00000080
+#endif
+
+/* The clock a timer knote's timerfd runs on, kept in kn_flags (the timer
+ * filter uses no other KNFL_ bits). CLOCK_MONOTONIC when neither is set. */
+#define KNFL_TIMER_REALTIME 0x100
+#define KNFL_TIMER_BOOTTIME 0x200
+#define KNFL_TIMER_CLOCKS (KNFL_TIMER_REALTIME | KNFL_TIMER_BOOTTIME)
 
 #ifndef NDEBUG
 static char *
@@ -131,8 +144,9 @@ static void convert_to_itimerspec(struct itimerspec *dst, uint64_t src, bool one
 	else if (fflags & NOTE_MACHTIME)
 	{
 		dbg_printf("...timer is in Mach-time-units: %llu\n", src);
+		// an absolute deadline is on mach_continuous_time() when the timer is a continuous one
 		if (fflags & NOTE_ABSOLUTE)
-			if (__builtin_sub_overflow(src, mach_absolute_time(), &src))
+			if (__builtin_sub_overflow(src, (fflags & NOTE_MACH_CONTINUOUS_TIME) ? mach_continuous_time() : mach_absolute_time(), &src))
 				src = 1;
 
 		mach_timebase_info_data_t timebase;
@@ -146,7 +160,8 @@ static void convert_to_itimerspec(struct itimerspec *dst, uint64_t src, bool one
 	{
 		dbg_printf("...timer is in mseconds: %llu\n", src);
 		if (fflags & NOTE_ABSOLUTE)
-			src -= (now.tv_sec * 1000) + (now.tv_usec / 1000);
+			if (__builtin_sub_overflow(src, (now.tv_sec * 1000ull) + (now.tv_usec / 1000), &src))
+				src = 1;
 
 		sec = src / 1000;
 		nsec = (src % 1000) * 1000000;
@@ -165,6 +180,113 @@ static void convert_to_itimerspec(struct itimerspec *dst, uint64_t src, bool one
     dst->it_value.tv_sec = sec;
     dst->it_value.tv_nsec = nsec;
     dbg_printf("%s", itimerspec_dump(dst));
+}
+
+/* An absolute deadline in wall-clock units (libdispatch's walltime timers)
+ * is armed on CLOCK_REALTIME at that time: converted to a relative
+ * CLOCK_MONOTONIC delay, it would not count the time the machine sleeps, and
+ * a phone that suspends would fire it late by as much as it slept. */
+static bool timer_is_wall(int fflags)
+{
+	return (fflags & NOTE_ABSOLUTE) && !(fflags & NOTE_MACHTIME);
+}
+
+static int timer_clock_flags(int fflags)
+{
+	if (timer_is_wall(fflags))
+		return KNFL_TIMER_REALTIME;
+	/* Mach continuous time goes on while asleep, as CLOCK_BOOTTIME does. */
+	if (fflags & NOTE_MACH_CONTINUOUS_TIME)
+		return KNFL_TIMER_BOOTTIME;
+	return 0;
+}
+
+static int timer_linux_clock(int clock_flags)
+{
+	if (clock_flags & KNFL_TIMER_REALTIME)
+		return LINUX_CLOCK_REALTIME;
+	if (clock_flags & KNFL_TIMER_BOOTTIME)
+		return LINUX_CLOCK_BOOTTIME;
+	return LINUX_CLOCK_MONOTONIC;
+}
+
+static void convert_to_wall_itimerspec(struct itimerspec *dst, uint64_t src, int fflags)
+{
+	uint64_t nsec;
+	uint64_t unit;
+
+	if (fflags & NOTE_SECONDS)
+		unit = 1000000000ull;
+	else if (fflags & NOTE_USECONDS)
+		unit = 1000ull;
+	else if (fflags & NOTE_NSECONDS)
+		unit = 1;
+	else
+		unit = 1000000ull;
+	if (__builtin_mul_overflow(src, unit, &nsec))
+		nsec = UINT64_MAX; /* far in the future */
+	if (nsec == 0)
+		nsec = 1; /* zero would disarm it; a past time fires at once */
+
+	dst->it_interval.tv_sec = 0;
+	dst->it_interval.tv_nsec = 0;
+	dst->it_value.tv_sec = nsec / 1000000000ull;
+	dst->it_value.tv_nsec = nsec % 1000000000ull;
+	dbg_printf("%s", itimerspec_dump(dst));
+}
+
+/* Sets the deadline of the knote's timerfd from its kevent: an absolute
+ * wall-clock deadline is an absolute time on CLOCK_REALTIME, everything else a
+ * relative delay. */
+static int timer_settime_for(int tfd, struct knote *kn)
+{
+	struct itimerspec ts;
+
+	if (timer_is_wall(kn->kev.fflags)) {
+		convert_to_wall_itimerspec(&ts, kn->kev.data, kn->kev.fflags);
+		if (timerfd_settime(tfd, LINUX_TFD_TIMER_ABSTIME, &ts, NULL) < 0) {
+			dbg_printf("timerfd_settime(2): %s", strerror(errno));
+			return (-1);
+		}
+		return (0);
+	}
+	convert_to_itimerspec(&ts, kn->kev.data, kn->kev.flags & EV_ONESHOT, kn->kev.fflags);
+	if (timerfd_settime(tfd, 0, &ts, NULL) < 0) {
+		dbg_printf("timerfd_settime(2): %s", strerror(errno));
+		return (-1);
+	}
+	return (0);
+}
+
+/* Arms the knote's timerfd as its kevent says, first moving it to a timerfd
+ * on another clock when the kevent asks for one. */
+static int timer_arm(struct filter *filt, struct knote *kn)
+{
+	int clock_flags = timer_clock_flags(kn->kev.fflags);
+
+	if (kn->data.pfd >= 0 && (kn->kn_flags & KNFL_TIMER_CLOCKS) != clock_flags) {
+		struct epoll_event ev;
+		int tfd = timerfd_create(timer_linux_clock(clock_flags), 0);
+
+		if (tfd < 0) {
+			dbg_printf("timerfd_create(2): %s", strerror(errno));
+			return (-1);
+		}
+		memset(&ev, 0, sizeof(ev));
+		ev.events = EPOLLIN;
+		ev.data.ptr = kn;
+		if (epoll_ctl(filter_epfd(filt), EPOLL_CTL_ADD, tfd, &ev) < 0) {
+			dbg_printf("epoll_ctl(2): %d", errno);
+			__close_for_kqueue(tfd);
+			return (-1);
+		}
+		epoll_ctl(filter_epfd(filt), EPOLL_CTL_DEL, kn->data.pfd, NULL);
+		__close_for_kqueue(kn->data.pfd);
+		kn->data.pfd = tfd;
+		kn->kn_flags = (kn->kn_flags & ~KNFL_TIMER_CLOCKS) | clock_flags;
+	}
+
+	return (timer_settime_for(kn->data.pfd, kn));
 }
 
 int
@@ -195,21 +317,20 @@ int
 evfilt_timer_knote_create(struct filter *filt, struct knote *kn)
 {
     struct epoll_event ev;
-    struct itimerspec ts;
     int tfd;
 
     kn->kev.flags |= EV_CLEAR;
 
-    tfd = timerfd_create(LINUX_CLOCK_MONOTONIC, 0);
+    int clock_flags = timer_clock_flags(kn->kev.fflags);
+    tfd = timerfd_create(timer_linux_clock(clock_flags), 0);
     if (tfd < 0) {
         dbg_printf("timerfd_create(2): %s", strerror(errno));
         return (-1);
     }
     dbg_printf("created timerfd %d", tfd);
+    kn->kn_flags = (kn->kn_flags & ~KNFL_TIMER_CLOCKS) | clock_flags;
 
-    convert_to_itimerspec(&ts, kn->kev.data, kn->kev.flags & EV_ONESHOT, kn->kev.fflags);
-    if (timerfd_settime(tfd, 0, &ts, NULL) < 0) {
-        dbg_printf("timerfd_settime(2): %s", strerror(errno));
+    if (timer_settime_for(tfd, kn) < 0) {
         __close_for_kqueue(tfd);
         return (-1);
     }
@@ -231,8 +352,6 @@ int
 evfilt_timer_knote_modify(struct filter *filt, struct knote *kn, 
         const struct kevent64_s *kev)
 {
-    struct itimerspec ts;
-    int tfd = kn->data.pfd;
     bool was_disabled = kn->kev.flags & EV_DISABLE;
 
     kn->kev.data = kev->data;
@@ -247,13 +366,7 @@ evfilt_timer_knote_modify(struct filter *filt, struct knote *kn,
     if (!kn->kev.data)
         kn->kev.data = 1;
 
-    convert_to_itimerspec(&ts, kn->kev.data, kn->kev.flags & EV_ONESHOT, kn->kev.fflags);
-    if (timerfd_settime(tfd, 0, &ts, NULL) < 0) {
-        dbg_printf("timerfd_settime(2): %s", strerror(errno));
-        return (-1);
-    }
-
-    return (0);
+    return (timer_arm(filt, kn));
 }
 
 int
@@ -280,19 +393,10 @@ evfilt_timer_knote_delete(struct filter *filt, struct knote *kn)
 int
 evfilt_timer_knote_enable(struct filter *filt, struct knote *kn)
 {
-    struct itimerspec ts;
-    int tfd = kn->data.pfd;
-
     if (!kn->kev.data)
         kn->kev.data = 1;
 
-    convert_to_itimerspec(&ts, kn->kev.data, kn->kev.flags & EV_ONESHOT, kn->kev.fflags);
-    if (timerfd_settime(tfd, 0, &ts, NULL) < 0) {
-        dbg_printf("timerfd_settime(2): %s", strerror(errno));
-        return (-1);
-    }
-
-    return (0);
+    return (timer_arm(filt, kn));
 }
 
 int
