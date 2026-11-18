@@ -169,6 +169,11 @@ knote_free_all_atfork(struct filter *filt)
                 kn->kdata.kn_dupfd = -1;
             }
         }
+        if (filt->kf_id == EVFILT_SIGNAL && kn->kn_sigeventfd >= 0) {
+            /* The descriptor that counts signals is a second helper of the knote. */
+            (void) __close_for_kqueue(kn->kn_sigeventfd);
+            kn->kn_sigeventfd = -1;
+        }
         free(kn);
     }
     pthread_rwlock_init(&filt->kf_knote_mtx, NULL);
