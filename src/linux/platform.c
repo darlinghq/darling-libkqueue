@@ -15,6 +15,7 @@
  */
 
 # define _GNU_SOURCE
+# include <fcntl.h>
 # include <poll.h>
 #include <pthread.h>
 #include "../common/private.h"
@@ -60,6 +61,7 @@ linux_kqueue_init(struct kqueue *kq)
         dbg_perror("epoll_create(2)");
         return (-1);
     }
+    (void) fcntl(kq->kq_id, F_SETFD, FD_CLOEXEC);
 
     if (filter_register_all(kq) < 0) {
         __close_for_kqueue(kq->kq_id);
