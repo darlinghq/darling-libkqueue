@@ -58,8 +58,18 @@ evfilt_proc_copyout(struct kevent64_s *dst, struct knote *src, void *ptr)
 	epoll_event_dump(ev);
 	kevent_int_to_64(&src->kev, dst);
 
-	// first, read the notification
-	rv = recv(src->kdata.kn_dupfd, &notification, sizeof(notification), 0);
+	// first, read the notification.
+	// another thread waiting on this kqueue may already have taken the
+	// notification this wakeup was for (see evfilt_machport_copyout());
+	// drop the event then instead of waiting for the next one with the
+	// kqueue locked. the server notifies again after a read if events remain.
+	do {
+		rv = recv(src->kdata.kn_dupfd, &notification, sizeof(notification), MSG_DONTWAIT);
+	} while (rv < 0 && errno == EINTR);
+	if (rv < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+		dst->filter = EVFILT_DROP;
+		return 0;
+	}
 	if (rv <= 0) {
 		dbg_printf("evfilt_proc_copyout() reading notification failed: %d (%s)", errno, strerror(errno));
 		dst->flags |= EV_EOF | EV_ONESHOT;

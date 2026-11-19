@@ -56,37 +56,32 @@ eventfd_raise(int evfd)
     return (rv);
 }
 
-/* NOTE: copy+pasted from linux_eventfd_lower() */
+/*
+ * Resets the counter of the (nonblocking) eventfd. Returns 1 if it was
+ * raised, 0 if it was not, and -1 on error.
+ */
 static int
 eventfd_lower(int evfd)
 {
     uint64_t cur;
     ssize_t n;
-    int rv = 0;
 
-    /* Reset the counter */
     dbg_puts("lowering event level");
-    n = read(evfd, &cur, sizeof(cur));
+    do {
+        n = read(evfd, &cur, sizeof(cur));
+    } while (n < 0 && errno == EINTR);
+
     if (n < 0) {
-        switch (errno) {
-            case EAGAIN:    
-                /* Not considered an error */
-                break;
-
-            case EINTR:
-                rv = -EINTR;
-                break;
-
-            default:
-                dbg_printf("read(2): %s", strerror(errno));
-                rv = -1;
-        }
-    } else if (n != sizeof(cur)) {
-        dbg_puts("short read");
-        rv = -1;
+        if (errno == EAGAIN)
+            return (0);
+        dbg_printf("read(2): %s", strerror(errno));
+        return (-1);
     }
-
-    return (rv);
+    if (n != sizeof(cur)) {
+        dbg_puts("short read");
+        return (-1);
+    }
+    return (1);
 }
 
 int
@@ -112,8 +107,19 @@ linux_evfilt_user_copyout(struct kevent64_s *dst, struct knote *src, void *ptr U
      * eventfd is still raised.
      */
     if (src->kev.flags & (EV_DISPATCH | EV_CLEAR | EV_ONESHOT)) {
-        if (eventfd_lower(src->kdata.kn_eventfd) < 0)
+        int rv = eventfd_lower(src->kdata.kn_eventfd);
+
+        if (rv < 0)
             return (-1);
+        if (rv == 0) {
+            /*
+             * Another thread waiting on this kqueue saw the same trigger
+             * and has delivered it already. Report nothing, and do not
+             * wait for the eventfd with the kqueue locked.
+             */
+            dst->filter = EVFILT_DROP;
+            return (0);
+        }
         src->kev.fflags &= ~NOTE_TRIGGER;
     }
 
@@ -126,8 +132,8 @@ linux_evfilt_user_knote_create(struct filter *filt, struct knote *kn)
     struct epoll_event ev;
     int evfd;
 
-    /* Create an eventfd */
-    evfd = eventfd(0, 0);
+    /* Create an eventfd; copyout must never block on it */
+    evfd = eventfd(0, EFD_NONBLOCK);
     if (evfd < 0) {
         dbg_perror("eventfd");
         goto errout;
