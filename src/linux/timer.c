@@ -266,7 +266,7 @@ static int timer_arm(struct filter *filt, struct knote *kn)
 
 	if (kn->data.pfd >= 0 && (kn->kn_flags & KNFL_TIMER_CLOCKS) != clock_flags) {
 		struct epoll_event ev;
-		int tfd = timerfd_create(timer_linux_clock(clock_flags), 0);
+		int tfd = timerfd_create(timer_linux_clock(clock_flags), TFD_NONBLOCK);
 
 		if (tfd < 0) {
 			dbg_printf("timerfd_create(2): %s", strerror(errno));
@@ -303,7 +303,19 @@ evfilt_timer_copyout(struct kevent64_s *dst, struct knote *src, void *ptr)
     /* On return, data contains the number of times the
        timer has been trigered.
      */
-    n = read(src->data.pfd, &expired, sizeof(expired));
+    do {
+        n = read(src->data.pfd, &expired, sizeof(expired));
+    } while (n < 0 && errno == EINTR);
+    if (n < 0 && errno == EAGAIN) {
+        /*
+         * Another thread waiting on this kqueue saw the same expiration and
+         * has delivered it already (or the timer was rearmed since). Report
+         * nothing rather than wait for the next expiration with the kqueue
+         * locked; a one-shot timer would never expire again.
+         */
+        dst->filter = EVFILT_DROP;
+        return (0);
+    }
     if (n != sizeof(expired)) {
         dbg_puts("invalid read from timerfd");
         expired = 1;  /* Fail gracefully */
@@ -322,7 +334,7 @@ evfilt_timer_knote_create(struct filter *filt, struct knote *kn)
     kn->kev.flags |= EV_CLEAR;
 
     int clock_flags = timer_clock_flags(kn->kev.fflags);
-    tfd = timerfd_create(timer_linux_clock(clock_flags), 0);
+    tfd = timerfd_create(timer_linux_clock(clock_flags), TFD_NONBLOCK);
     if (tfd < 0) {
         dbg_printf("timerfd_create(2): %s", strerror(errno));
         return (-1);
