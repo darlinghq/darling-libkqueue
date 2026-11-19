@@ -46,8 +46,20 @@ evfilt_machport_copyout(struct kevent64_s *dst, struct knote *src, void *ptr)
     epoll_event_dump(ev);
     kevent_int_to_64(&src->kev, dst);
 
-	// first, read the notification
-	rv = recv(src->kdata.kn_dupfd, &notification, sizeof(notification), 0);
+	// first, read the notification.
+	// several threads can wait on one kqueue at once, and all of them may
+	// see the channel readable for the same notification. the first one to
+	// get here takes it; the others find the channel empty and drop the event
+	// rather than wait (with the kqueue locked) for a notification that only
+	// a new message would bring. nothing is lost: after answering a read,
+	// the server sends a new notification if more events are pending.
+	do {
+		rv = recv(src->kdata.kn_dupfd, &notification, sizeof(notification), MSG_DONTWAIT);
+	} while (rv < 0 && errno == EINTR);
+	if (rv < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+		dst->filter = EVFILT_DROP;
+		return 0;
+	}
 	if (rv < 0) {
 		dbg_printf("evfilt_machport_copyout() reading notification failed: %d (%s)", errno, strerror(errno));
 		return -1;
