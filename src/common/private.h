@@ -192,6 +192,15 @@ struct kqueue_vtable {
     // Called in a fork child before the inherited kqueue is freed.
     // Optional (may be NULL).
     void (*kqueue_atfork)(struct kqueue *);
+    // Called with the kqueue locked after a thread has been counted in kq_waiters,
+    // before it waits. Returns nonzero if events are already pending (the wait must not block).
+    // Optional (may be NULL).
+    int  (*kevent_wait_enter)(struct kqueue *);
+    // Called with the kqueue locked after the thread has been removed from kq_waiters,
+    // with the result of kevent_wait and the number of events wanted. Returns the number of
+    // ready events to copy out (it may add events that are ready without a wait result).
+    // Optional (may be NULL).
+    int  (*kevent_wait_exit)(struct kqueue *, int, int);
 };
 extern const struct kqueue_vtable kqops;
 

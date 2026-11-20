@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <string.h>
+#include <time.h>
 
 #include "private.h"
 
@@ -431,21 +432,39 @@ kevent64_impl(int kqfd, const struct kevent64_s *changelist, int nchanges,
         nevents = MAX_KEVENT;
     if ((flags & KEVENT_FLAG_ERROR_EVENTS) == 0 && nevents > 0) {
         const struct timespec* ts = (flags & KEVENT_FLAG_IMMEDIATE) ? (&timeout_zero) : timeout;
+        struct timespec deadline, remaining;
+
+        /* a wakeup whose events are all dropped must not end a timed wait early */
+        if (ts != NULL && (ts->tv_sec != 0 || ts->tv_nsec != 0)) {
+            clock_gettime(CLOCK_MONOTONIC, &deadline);
+            deadline.tv_sec += ts->tv_sec;
+            deadline.tv_nsec += ts->tv_nsec;
+            if (deadline.tv_nsec >= 1000000000) {
+                deadline.tv_sec++;
+                deadline.tv_nsec -= 1000000000;
+            }
+        }
 again:
         /*
          * The events returned by kevent_wait() point at knotes. Another
          * thread may delete one of them before we copy it out, so knotes
          * queued for freeing are only reclaimed once no thread is waiting.
          */
+        const struct timespec* wait_ts = ts;
+
         kqueue_lock(kq);
         kq->kq_waiters++;
+        if (kqops.kevent_wait_enter != NULL && kqops.kevent_wait_enter(kq))
+            wait_ts = &timeout_zero;
         kqueue_unlock(kq);
 
-        rv = kqops.kevent_wait(kq, nevents, ts);
+        rv = kqops.kevent_wait(kq, nevents, wait_ts);
         dbg_printf("kqops.kevent_wait returned %d", rv);
 
         kqueue_lock(kq);
         kq->kq_waiters--;
+        if (kqops.kevent_wait_exit != NULL)
+            rv = kqops.kevent_wait_exit(kq, rv, nevents);
         if (fastpath(rv > 0)) {
             rv = kqops.kevent_copyout(kq, rv, eventlist, nevents);
             ret += rv;
@@ -459,6 +478,20 @@ again:
             /* Avoid returning 0 when waiting indefinitely in case of spurious wakeups */
             if (ts == NULL)
                 goto again;
+            if (ts->tv_sec != 0 || ts->tv_nsec != 0) {
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                remaining.tv_sec = deadline.tv_sec - now.tv_sec;
+                remaining.tv_nsec = deadline.tv_nsec - now.tv_nsec;
+                if (remaining.tv_nsec < 0) {
+                    remaining.tv_sec--;
+                    remaining.tv_nsec += 1000000000;
+                }
+                if (remaining.tv_sec > 0 || (remaining.tv_sec == 0 && remaining.tv_nsec > 0)) {
+                    ts = &remaining;
+                    goto again;
+                }
+            }
         } else {
             dbg_printf("(%u) kevent_wait failed", myid);
             goto out;
