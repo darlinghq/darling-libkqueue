@@ -45,7 +45,9 @@ const struct kqueue_vtable kqops = {
     linux_eventfd_raise,
     linux_eventfd_lower,
     linux_eventfd_descriptor,
-    linux_kqueue_atfork
+    linux_kqueue_atfork,
+    linux_machport_wait_enter,
+    linux_machport_wait_exit
 };
 
 static void tls_setup(void)
@@ -61,6 +63,11 @@ linux_kqueue_init(struct kqueue *kq)
         dbg_perror("epoll_create(2)");
         return (-1);
     }
+
+    LIST_INIT(&kq->kq_machports);
+    LIST_INIT(&kq->kq_mp_waiters);
+    kq->kq_mp_wakefd = -1;
+    kq->kq_mp_wake_raised = 0;
     (void) fcntl(kq->kq_id, F_SETFD, FD_CLOEXEC);
 
     if (filter_register_all(kq) < 0) {
@@ -100,6 +107,8 @@ linux_kqueue_free(struct kqueue *kq UNUSED)
     /* -1 after linux_kqueue_atfork() */
     if (kq->kq_id >= 0)
         __close_for_kqueue(kq->kq_id);
+    if (kq->kq_mp_wakefd >= 0)
+        __close_for_kqueue(kq->kq_mp_wakefd);
     // abort();//FIXME
 }
 
@@ -116,6 +125,9 @@ linux_kqueue_atfork(struct kqueue *kq)
      */
     (void) __close_for_kqueue(kq->kq_id);
     kq->kq_id = -1;
+
+    /* the threads that waited in the parent do not exist in the child */
+    LIST_INIT(&kq->kq_mp_waiters);
 }
 
 static int
@@ -169,6 +181,12 @@ static struct epoll_event* epevt_get()
 	}
 
 	return epevt;
+}
+
+struct epoll_event *
+linux_kevent_epevt(void)
+{
+    return epevt_get();
 }
 
 int
@@ -228,9 +246,12 @@ linux_kevent_copyout(struct kqueue *kq, int nready,
         /*
          * The knote may have been deleted or disabled by another thread
          * after epoll_wait() returned it. Such a knote must not be
-         * delivered (the caller may already have freed its udata).
+         * delivered (the caller may already have freed its udata),
+         * unless it has an event that was taken before (an EVFILT_MACHPORT
+         * knote whose message was received before it was deleted).
          */
-        if ((kn->kn_flags & KNFL_KNOTE_DELETED) || (kn->kev.flags & EV_DISABLE)) {
+        if (((kn->kn_flags & KNFL_KNOTE_DELETED) || (kn->kev.flags & EV_DISABLE))
+                && !linux_machport_deliverable(kn)) {
             nret--;
             continue;
         }
@@ -249,6 +270,16 @@ linux_kevent_copyout(struct kqueue *kq, int nready,
 
         /* If an empty kevent structure is returned, the event is discarded. */
         /* TODO: add these semantics to windows + solaris platform.c */
+
+        if (kn->kn_flags & KNFL_KNOTE_DELETED) {
+            /* the last event of a deleted knote; there is nothing to disable or delete */
+            if (event->filter != EVFILT_DROP && event->filter != EVFILT_DROP_POSTPROCESS)
+                eventlist++;
+            else
+                nret--;
+            linux_machport_delivered(kn);
+            continue;
+        }
 
         if (fastpath(event->filter != EVFILT_DROP && event->filter != EVFILT_DROP_POSTPROCESS)) {
             eventlist++;
@@ -275,6 +306,8 @@ linux_kevent_copyout(struct kqueue *kq, int nready,
             }
         }
     }
+
+    linux_machport_after_copyout(kq);
 
     return (nret);
 }

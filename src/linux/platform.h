@@ -64,6 +64,29 @@ extern long int syscall (long int __sysno, ...);
  */
 #undef FILTER_PLATFORM_SPECIFIC 
 
+struct linux_machport_event;
+
+/* EVFILT_MACHPORT state of a knote (see machport.c) */
+/* a thread waiting in kevent (one per thread; kevent calls do not nest) */
+struct linux_machport_waiter {
+    LIST_ENTRY(linux_machport_waiter) entries;
+    int tid;
+};
+
+struct linux_machport_state {
+    /* shared with darlingserver as a dserver_kqchan_mach_port_shared_t: keep these four first, in this order */
+    volatile uint32_t armed;
+    volatile uint32_t sequence;
+    volatile uint32_t wanted;
+    volatile int32_t thread;
+    uint32_t consumed;  /* sequence number of the last event received from the server */
+    uint32_t arming;    /* the last nonzero value of `armed` */
+    unsigned int flags;
+    struct linux_machport_event *pending; /* events received but not delivered yet */
+    struct linux_machport_event **pending_tail;
+    LIST_ENTRY(knote) entries;  /* in kq_machports */
+};
+
 /*
  * Additional members of struct knote
  */
@@ -79,14 +102,19 @@ extern long int syscall (long int __sysno, ...);
         int kn_eventfd; \
         int kn_dupfd; \
     } kdata; \
-    int kn_sigeventfd; /* EVFILT_SIGNAL: counts signals taken by a handler */
+    int kn_sigeventfd; /* EVFILT_SIGNAL: counts signals taken by a handler */ \
+    struct linux_machport_state kn_mp
 
 /*
  * Additional members of struct kqueue
  */
 #define KQUEUE_PLATFORM_SPECIFIC \
     struct epoll_event kq_plist[MAX_KEVENT]; \
-    size_t kq_nplist
+    size_t kq_nplist; \
+    LIST_HEAD(, knote) kq_machports; /* EVFILT_MACHPORT knotes, incl. deleted ones with undelivered events */ \
+    int kq_mp_wakefd; /* eventfd in the epoll set; raised when such knotes have events to deliver */ \
+    int kq_mp_wake_raised; \
+    LIST_HEAD(, linux_machport_waiter) kq_mp_waiters /* the threads waiting in kevent */
 
 int     linux_kqueue_init(struct kqueue *);
 void    linux_kqueue_free(struct kqueue *);
@@ -94,8 +122,17 @@ void    linux_kqueue_atfork(struct kqueue *);
 
 int     linux_kevent_wait(struct kqueue *, int, const struct timespec *);
 int     linux_kevent_copyout(struct kqueue *, int, struct kevent64_s *, int);
+struct epoll_event *linux_kevent_epevt(void);
 
 int     linux_knote_copyout(struct kevent64_s *, struct knote *);
+
+/* EVFILT_MACHPORT hooks (machport.c) */
+int     linux_machport_wait_enter(struct kqueue *);
+int     linux_machport_wait_exit(struct kqueue *, int, int);
+int     linux_machport_deliverable(struct knote *);
+void    linux_machport_delivered(struct knote *);
+void    linux_machport_after_copyout(struct kqueue *);
+int     linux_machport_is_wake_event(struct kqueue *, struct epoll_event *);
 
 int     linux_eventfd_init(struct eventfd *);
 void    linux_eventfd_close(struct eventfd *);
