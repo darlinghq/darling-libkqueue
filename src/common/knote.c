@@ -33,12 +33,14 @@ knote_init(void)
 /*
  * EV_UDATA_SPECIFIC asks for a separate registration per udata value.
  * This is supported for EVFILT_READ and EVFILT_WRITE, where every knote
- * already owns its own duplicate of the descriptor in epoll.
+ * already owns its own duplicate of the descriptor in epoll, and for
+ * EVFILT_MEMORYSTATUS, whose knotes own nothing.
  */
 static int
 knote_udata_specific(const struct knote *kn)
 {
-    return ((kn->kev.filter == EVFILT_READ || kn->kev.filter == EVFILT_WRITE)
+    return ((kn->kev.filter == EVFILT_READ || kn->kev.filter == EVFILT_WRITE
+            || kn->kev.filter == EVFILT_MEMORYSTATUS)
             && (kn->kev.flags & EV_UDATA_SPECIFIC));
 }
 
