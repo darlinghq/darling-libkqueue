@@ -31,6 +31,8 @@ if (DARLING)
 	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -nostdinc -DHAVE_SYS_EVENTFD_H -DHAVE_SYS_SIGNALFD_H -DHAVE_SYS_TIMERFD_H -ggdb -O0")
 
 	#add_definitions(-DKERNEL_PRIVATE)
+	# <sys/event.h> declares EVFILT_MEMORYSTATUS only under PRIVATE
+	add_definitions(-DPRIVATE)
 	add_definitions(-Dkqueue=kqueue_impl -Dkevent=kevent_impl -Dkevent64=kevent64_impl)
 	#add_definitions(-Dclose=__close_for_kqueue)
 endif (DARLING)
@@ -82,6 +84,7 @@ else()
 		src/common/map.c
 		src/common/kevent.c
 		src/common/kqueue.c		
+		src/common/memorystatus.c
 	)
 	include_directories(
 		src/common
