@@ -57,6 +57,15 @@ int __close_for_kqueue(int fd);
 
 #include "debug.h"
 
+#ifdef DARLING
+# include <stdlib.h>
+# include "../darling/kq_alloc.h"
+# define malloc  __darling_kqueue_malloc
+# define calloc  __darling_kqueue_calloc
+# define realloc __darling_kqueue_realloc
+# define free    __darling_kqueue_free
+#endif
+
 /* Workaround for Android */
 #ifndef EPOLLONESHOT
 # define EPOLLONESHOT (1 << 30)

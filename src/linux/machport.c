@@ -313,7 +313,29 @@ mp_check_wanted(struct knote *kn)
     }
 }
 
-static __thread struct linux_machport_waiter mp_self;
+static pthread_key_t mp_waiter_key;
+static pthread_once_t mp_waiter_once = PTHREAD_ONCE_INIT;
+
+static void
+mp_waiter_key_init(void)
+{
+    pthread_key_create(&mp_waiter_key, free);
+}
+
+static struct linux_machport_waiter *
+mp_waiter_get(void)
+{
+    struct linux_machport_waiter *self;
+
+    pthread_once(&mp_waiter_once, mp_waiter_key_init);
+    self = pthread_getspecific(mp_waiter_key);
+    if (self == NULL) {
+        self = calloc(1, sizeof(*self));
+        if (self != NULL)
+            pthread_setspecific(mp_waiter_key, self);
+    }
+    return (self);
+}
 
 /*
  * The server receives the knote's messages in the context of the waiting thread that the knote names:
@@ -683,12 +705,14 @@ evfilt_machport_destroy(struct filter *filt)
 int
 linux_machport_wait_enter(struct kqueue *kq)
 {
+    struct linux_machport_waiter *self = mp_waiter_get();
     struct knote *kn;
     int pending = 0;
 
-    if (mp_self.tid == 0)
-        mp_self.tid = THREAD_ID;
-    LIST_INSERT_HEAD(&kq->kq_mp_waiters, &mp_self, entries);
+    if (self != NULL) {
+        self->tid = THREAD_ID;
+        LIST_INSERT_HEAD(&kq->kq_mp_waiters, self, entries);
+    }
 
     LIST_FOREACH(kn, &kq->kq_machports, kn_mp.entries) {
         if (linux_machport_deliverable(kn)) {
@@ -713,11 +737,13 @@ linux_machport_is_wake_event(struct kqueue *kq, struct epoll_event *ev)
 int
 linux_machport_wait_exit(struct kqueue *kq, int nready, int nevents)
 {
+    struct linux_machport_waiter *self = mp_waiter_get();
     struct epoll_event *epevt;
     struct knote *kn;
     int i, j, n;
 
-    LIST_REMOVE(&mp_self, entries);
+    if (self != NULL)
+        LIST_REMOVE(self, entries);
 
     if (LIST_EMPTY(&kq->kq_machports) && kq->kq_mp_wakefd < 0)
         return (nready);

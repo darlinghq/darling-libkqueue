@@ -335,6 +335,7 @@ void VISIBLE kqueue_atfork(void)
     // Mutexes are not valid after a fork, reset it to unlocked state
     pthread_mutex_init(&kq_mtx, NULL);
 #ifdef DARLING
+    __darling_kqueue_alloc_atfork();
     __darling_kqueue_listenregistry_atfork();
 #endif
     if (kqmap != NULL)
