@@ -59,6 +59,11 @@ write_space_avail(int fd)
         return (0);
     }
 
+    /* A regular file is always writable and has no write buffer to measure;
+     * Darwin reports one byte of space (observed on macOS 10.14 and 26). */
+    if (S_ISREG(sb.st_mode))
+        return (1);
+
     if (S_ISFIFO(sb.st_mode)) {
         if (ioctl(fd, FIONREAD, &queued) < 0)
             return (0);
@@ -132,7 +137,7 @@ evfilt_socket_knote_create(struct filter *filt, struct knote *kn)
      * (EPERM): the registration failed (kevent EBADF), so a dispatch write source on a file never fired.
      * A receiver writing incoming data into a temporary file through such a source stalled at 0 bytes and
      * the resource was never delivered. An eventfd stands in for the file: always writable (EPOLLOUT), as
-     * read.c's surrogate is always readable; the copyout reports 1 byte of space (no socket buffer to measure). */
+     * read.c's surrogate is always readable; write_space_avail() reports 1 byte of space for it. */
     if (kn->kn_flags & KNFL_REGULAR_FILE)
         kn->kdata.kn_dupfd = eventfd(0, EFD_CLOEXEC);
     else
