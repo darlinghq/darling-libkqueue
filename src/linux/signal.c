@@ -264,7 +264,7 @@ evfilt_signal_knote_delete(struct filter *filt, struct knote *kn)
 {
     const int sigfd = kn->kdata.kn_signalfd;
 
-    /* Needed so that delete() can be called after disable() */
+    /* Needed so that delete() can be called twice */
     if (kn->kdata.kn_signalfd == -1)
         return (0);
 
@@ -276,7 +276,8 @@ evfilt_signal_knote_delete(struct filter *filt, struct knote *kn)
     }
 #endif
 
-    if (epoll_ctl(filter_epfd(filt), EPOLL_CTL_DEL, sigfd, NULL) < 0) {
+    /* The descriptor is not in the epoll set while the knote is disabled. */
+    if (epoll_ctl(filter_epfd(filt), EPOLL_CTL_DEL, sigfd, NULL) < 0 && errno != ENOENT) {
         dbg_perror("epoll_ctl(2)");
         return (-1);
     }
@@ -292,18 +293,51 @@ evfilt_signal_knote_delete(struct filter *filt, struct knote *kn)
     return (0);
 }
 
-int
-evfilt_signal_knote_enable(struct filter *filt, struct knote *kn)
-{
-    dbg_printf("enabling ident %u", (unsigned int) kn->kev.ident);
-    return evfilt_signal_knote_create(filt, kn);
-}
-
+/*
+ * Disabling a signal knote only stops it from waking kevent(): the signal
+ * keeps being recorded, as kqueue(2) describes ("the number of times the
+ * signal occurred since the last call"), and is reported once the knote is
+ * enabled again. An EV_DISPATCH knote is disabled while its event is being
+ * handled, so signals that arrive then must not be lost.
+ */
 int
 evfilt_signal_knote_disable(struct filter *filt, struct knote *kn)
 {
     dbg_printf("disabling ident %u", (unsigned int) kn->kev.ident);
-    return evfilt_signal_knote_delete(filt, kn);
+
+    if (kn->kdata.kn_signalfd == -1)
+        return (0);
+    (void) epoll_ctl(filter_epfd(filt), EPOLL_CTL_DEL, kn->kdata.kn_signalfd, NULL);
+#ifdef DARLING
+    if (kn->kn_sigeventfd >= 0)
+        (void) epoll_ctl(filter_epfd(filt), EPOLL_CTL_DEL, kn->kn_sigeventfd, NULL);
+#endif
+    return (0);
+}
+
+int
+evfilt_signal_knote_enable(struct filter *filt, struct knote *kn)
+{
+    dbg_printf("enabling ident %u", (unsigned int) kn->kev.ident);
+
+    if (kn->kdata.kn_signalfd == -1)
+        return evfilt_signal_knote_create(filt, kn);
+
+    /* A descriptor with a pending count is reported right away. */
+    if (signalfd_add(filter_epfd(filt), kn->kdata.kn_signalfd, kn) < 0 && errno != EEXIST)
+        return (-1);
+#ifdef DARLING
+    if (kn->kn_sigeventfd >= 0) {
+        struct epoll_event ev;
+
+        memset(&ev, 0, sizeof(ev));
+        ev.events = EPOLLIN;
+        ev.data.ptr = kn;
+        if (epoll_ctl(filter_epfd(filt), EPOLL_CTL_ADD, kn->kn_sigeventfd, &ev) < 0 && errno != EEXIST)
+            return (-1);
+    }
+#endif
+    return (0);
 }
 
 
