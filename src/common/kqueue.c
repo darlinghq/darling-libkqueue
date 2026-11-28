@@ -371,9 +371,11 @@ kqueue_impl(void)
         }
     }
 #else
-    (void) pthread_mutex_lock(&kq_mtx);
+    /* pthread_once already serialises libkqueue_init. The outer kq_mtx
+     * caused a lock-order inversion against libc's atfork-list lock:
+     * libkqueue_init calls pthread_atfork, while fork() takes the same
+     * libc lock before running our atfork handlers, which take kq_mtx. */
     (void) pthread_once(&kq_is_initialized, libkqueue_init);
-    (void) pthread_mutex_unlock(&kq_mtx);
 #endif
 
     kq = calloc(1, sizeof(*kq));

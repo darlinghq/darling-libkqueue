@@ -34,6 +34,11 @@
 
 /*
  * Return the offset from the current position to end of file.
+ *
+ * lseek() and fstat() are not atomic: the file may have been shrunk
+ * between them, or the caller may have seeked past EOF. Clamp to zero
+ * so EOF is reported correctly instead of underflowing to a large
+ * negative intptr_t and leaving the knote spinning.
  */
 static intptr_t
 get_eof_offset(int fd)
@@ -52,7 +57,10 @@ get_eof_offset(int fd)
     }
 
     dbg_printf("curpos=%zu size=%zu\n", (size_t)curpos, (size_t)sb.st_size);
-    return (sb.st_size - curpos); //FIXME: can overflow
+    if (curpos >= sb.st_size)
+        return 0;
+
+    return (intptr_t) (sb.st_size - curpos);
 }
 
 int
@@ -172,7 +180,7 @@ evfilt_read_knote_create(struct filter *filt, struct knote *kn)
     if (kn->kn_flags & KNFL_REGULAR_FILE) {
         int evfd;
 
-        evfd = eventfd(0, 0);
+        evfd = eventfd(0, EFD_CLOEXEC);
         if (evfd < 0) {
             dbg_perror("eventfd(2)");
             return (-1);

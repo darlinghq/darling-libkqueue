@@ -28,6 +28,7 @@
 #include <sys/types.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/eventfd.h>
 
 #include <darling/emulation/linux_premigration/ext/for-libkqueue.h>
 
@@ -57,6 +58,11 @@ write_space_avail(int fd)
         /* race condition with close, so ignore this error */
         return (0);
     }
+
+    /* A regular file is always writable and has no write buffer to measure;
+     * Darwin reports one byte of space (observed on macOS 10.14 and 26). */
+    if (S_ISREG(sb.st_mode))
+        return (1);
 
     if (S_ISFIFO(sb.st_mode)) {
         if (ioctl(fd, FIONREAD, &queued) < 0)
@@ -108,9 +114,11 @@ evfilt_socket_knote_create(struct filter *filt, struct knote *kn)
     if (linux_get_descriptor_type(kn) < 0)
         return (-1);
 
+#ifndef DARLING
     /* TODO: return EBADF? */
     if (kn->kn_flags & KNFL_REGULAR_FILE)
         return (-1);
+#endif
 
     /* Convert the kevent into an epoll_event */
     kn->data.events = EPOLLOUT;
@@ -124,6 +132,16 @@ evfilt_socket_knote_create(struct filter *filt, struct knote *kn)
     ev.events = kn->data.events;
     ev.data.ptr = kn;
 
+#ifdef DARLING
+    /* A regular file is always writable to XNU (EVFILT_WRITE on a vnode), but epoll refuses regular files
+     * (EPERM): the registration failed (kevent EBADF), so a dispatch write source on a file never fired.
+     * A receiver writing incoming data into a temporary file through such a source stalled at 0 bytes and
+     * the resource was never delivered. An eventfd stands in for the file: always writable (EPOLLOUT), as
+     * read.c's surrogate is always readable; write_space_avail() reports 1 byte of space for it. */
+    if (kn->kn_flags & KNFL_REGULAR_FILE)
+        kn->kdata.kn_dupfd = eventfd(0, EFD_CLOEXEC);
+    else
+#endif
     /* Duplicate the fd to workaround epoll's poor design */
 	kn->kdata.kn_dupfd = _dup_4libkqueue(kn->kev.ident);
 

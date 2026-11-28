@@ -189,8 +189,10 @@ linux_evfilt_user_knote_modify(struct filter *filt UNUSED, struct knote *kn,
             break;
 
         default:
-            /* XXX Return error? */
-            break;
+            /* NOTE_FFCTRLMASK is two bits, so all four values are
+             * handled above; be defensive about out-of-range input. */
+            errno = EINVAL;
+            return (-1);
     }
 
     if ((!(kn->kev.flags & EV_DISABLE)) && kev->fflags & NOTE_TRIGGER) {
