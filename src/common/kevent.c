@@ -259,7 +259,11 @@ kevent_copyin(struct kqueue *kq, const struct kevent64_s *src, int nchanges,
 
 err_path:
         if (nevents > 0) {
-            memcpy(eventlist, src, sizeof(*src));
+            /* A caller may pass one array as both changelist and eventlist;
+             * the copy would then be a self-memcpy. The kev is already in
+             * place in that case, so only copy when the pointers differ. */
+            if (eventlist != src)
+                memcpy(eventlist, src, sizeof(*src));
             eventlist->data = status;
             eventlist->flags = EV_ERROR;
             nevents--;
