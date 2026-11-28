@@ -367,7 +367,8 @@ evfilt_timer_knote_modify(struct filter *filt, struct knote *kn,
     bool was_disabled = kn->kev.flags & EV_DISABLE;
 
     kn->kev.data = kev->data;
-    kn->kev.flags = kev->flags;
+    /* EV_RECEIPT is sticky on BSD; preserve it across modify. */
+    kn->kev.flags = kev->flags | (kn->kev.flags & EV_RECEIPT);
     kn->kev.fflags = kev->fflags;
 
     /* Updating a disabled timer must not arm it. If requested, the common
