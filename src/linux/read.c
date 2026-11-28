@@ -180,7 +180,7 @@ evfilt_read_knote_create(struct filter *filt, struct knote *kn)
     if (kn->kn_flags & KNFL_REGULAR_FILE) {
         int evfd;
 
-        evfd = eventfd(0, 0);
+        evfd = eventfd(0, EFD_CLOEXEC);
         if (evfd < 0) {
             dbg_perror("eventfd(2)");
             return (-1);
